@@ -1,0 +1,49 @@
+{
+  "name": "@template/notifications",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Notification service for task tracker and GitHub events",
+  "repository": {
+    "type": "git",
+    "url": "<PLACEHOLDER>",
+    "directory": "packages/notifications"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "dist"
+  },
+  "scripts": {
+    "codegen": "build-utils prepare-v2",
+    "build": "pnpm build-esm && pnpm build-annotate && pnpm build-cjs && build-utils pack-v2",
+    "build-esm": "tsc -b tsconfig.build.json",
+    "build-cjs": "babel build/esm --plugins @babel/transform-export-namespace-from --plugins @babel/transform-modules-commonjs --out-dir build/cjs --source-maps",
+    "build-annotate": "babel build/esm --plugins annotate-pure-calls --out-dir build/esm --source-maps",
+    "check": "tsc -b tsconfig.json",
+    "dev": "tsx src/Main.ts",
+    "start": "node build/esm/Main.js",
+    "test": "vitest",
+    "coverage": "vitest --coverage"
+  },
+  "dependencies": {
+    "effect": "latest",
+    "@effect/platform": "latest",
+    "@effect/platform-node": "latest",
+    "@effect/cli": "latest",
+    "@linear/sdk": "latest",
+    "octokit": "latest",
+    "telegraf": "latest"
+  },
+  "effect": {
+    "generateExports": {
+      "include": [
+        "**/*.ts"
+      ]
+    },
+    "generateIndex": {
+      "include": [
+        "**/*.ts"
+      ]
+    }
+  }
+}
