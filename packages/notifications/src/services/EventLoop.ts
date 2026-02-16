@@ -6,6 +6,7 @@ import { Console, Effect, Layer, Match, Option, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
+import { AutoMergeLive } from "./AutoMerge.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { GitHubEventSource, GitHubEventSourceLive } from "./GitHubEventSource.js"
@@ -48,10 +49,15 @@ const servicesLayer = Layer.mergeAll(
   Layer.provide(octokitLayer)
 )
 
+const autoMergeLayer = AutoMergeLive.pipe(
+  Layer.provide(servicesLayer)
+)
+
 const eventSourcesLayer = Layer.mergeAll(
   GitHubEventSourceLive,
   TaskEventSourceLive
 ).pipe(
+  Layer.provide(autoMergeLayer),
   Layer.provide(servicesLayer),
   Layer.provide(lalphConfigLayer)
 )
