@@ -2,7 +2,7 @@
  * Event loop and layer construction for the notification service
  * @since 1.0.0
  */
-import { Console, Effect, Layer, Match, Option, Stream } from "effect"
+import { Console, Effect, Layer, Match, Option, Ref, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
@@ -94,6 +94,9 @@ export const MainLayer = Layer.mergeAll(
  * @since 1.0.0
  * @category event-loop
  */
+export const PLAN_BUTTON_LABEL = "Plan"
+const DONE_BUTTON_LABEL = "Done"
+
 export const runEventLoop = Effect.gen(function*() {
   const githubEvents = yield* GitHubEventSource
   const taskEvents = yield* TaskEventSource
@@ -103,6 +106,9 @@ export const runEventLoop = Effect.gen(function*() {
   const tracker = yield* TaskTracker
   const branchParser = yield* BranchParser
   const planSession = yield* PlanSession
+
+  const collectingPlan = yield* Ref.make(false)
+  const planBuffer = yield* Ref.make<ReadonlyArray<string>>([])
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -188,17 +194,34 @@ export const runEventLoop = Effect.gen(function*() {
 
   const handleIncomingMessage = (msg: { text: string }) =>
     Effect.gen(function*() {
-      if (msg.text.startsWith("/plan ")) {
-        const planText = msg.text.slice("/plan ".length).trim()
-        if (planText.length === 0) {
-          yield* notifier.sendMessage("Usage: /plan <description>")
+      if (msg.text === PLAN_BUTTON_LABEL) {
+        yield* Ref.set(collectingPlan, true)
+        yield* Ref.set(planBuffer, [])
+        yield* notifier.sendMessage({
+          text: "Describe what you'd like to plan. Send your messages, then tap <b>Done</b> when ready.",
+          options: [{ label: DONE_BUTTON_LABEL }]
+        })
+        return
+      }
+      const isCollecting = yield* Ref.get(collectingPlan)
+      if (msg.text === DONE_BUTTON_LABEL && isCollecting) {
+        const messages = yield* Ref.get(planBuffer)
+        yield* Ref.set(collectingPlan, false)
+        yield* Ref.set(planBuffer, [])
+        const joinedText = messages.join("\n")
+        if (joinedText.trim().length === 0) {
+          yield* notifier.sendMessage("No plan description provided.")
           return
         }
-        yield* planSession.start(planText).pipe(
+        yield* planSession.start(joinedText).pipe(
           Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
           Effect.orElseSucceed(() => undefined)
         )
         yield* notifier.sendMessage("Planning started...")
+        return
+      }
+      if (isCollecting) {
+        yield* Ref.update(planBuffer, (buf) => [...buf, msg.text])
         return
       }
       const active = yield* planSession.isActive
@@ -242,6 +265,10 @@ export const runEventLoop = Effect.gen(function*() {
     taskEvents.stream
   )
 
+  yield* notifier.sendMessage({
+    text: "Notification service started.",
+    options: [{ label: PLAN_BUTTON_LABEL }]
+  })
   yield* Console.log("Notification service started. Press Ctrl+C to stop.")
 
   yield* Stream.merge(
