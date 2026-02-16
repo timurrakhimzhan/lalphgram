@@ -216,6 +216,11 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
     ),
     addIssueLabels: vi.fn(() => Effect.void),
     listPullReviewComments: vi.fn(() => Effect.succeed([])),
+    getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
+    listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+    mergePull: vi.fn(() =>
+      Effect.succeed({ sha: "abc123", merged: true, message: "Pull Request successfully merged" })
+    ),
     ...overrides
   })
 

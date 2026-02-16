@@ -75,7 +75,10 @@ const makeOctokitMock = (): OctokitClientService => ({
       createdAt: "2024-01-15T11:00:00Z",
       htmlUrl: "https://github.com/owner/my-repo/pull/42#discussion_r300"
     }])
-  )
+  ),
+  getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
+  listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+  mergePull: vi.fn(() => Effect.succeed({ sha: "abc123", merged: true, message: "Pull Request successfully merged" }))
 })
 
 const makeTestLayer = (mock: OctokitClientService) =>
