@@ -150,14 +150,32 @@ export const runEventLoop = Effect.gen(function*() {
           Effect.orElseSucceed(() => undefined)
         )),
       Match.tag("PRAutoMerged", (e) =>
-        Effect.logInfo("PR auto-merged").pipe(
-          Effect.annotateLogs("pr", e.pr.html_url)
+        notifier.sendMessage(
+          `✅ <b>PR auto-merged</b>\n<a href="${e.pr.html_url}">${e.pr.title}</a>`
         )),
       Match.tag("PRCIFailed", (e) =>
-        Effect.logInfo("PR CI failed").pipe(
-          Effect.annotateLogs("pr", e.pr.html_url),
-          Effect.annotateLogs("failedChecks", String(e.failedChecks.length))
-        )),
+        Effect.gen(function*() {
+          const issueIdOption = branchParser.resolveIssueId(e.pr)
+          if (Option.isSome(issueIdOption)) {
+            const issueId = issueIdOption.value
+            yield* tracker.moveToTodo(issueId).pipe(
+              Effect.tapError((err) => Effect.logError(`Failed to move to todo: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+            yield* tracker.setPriorityUrgent(issueId).pipe(
+              Effect.tapError((err) => Effect.logError(`Failed to set priority: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+          } else {
+            yield* Effect.logWarning("No issue ID found in branch name").pipe(
+              Effect.annotateLogs("branch", e.pr.headRef)
+            )
+          }
+          const failedCheckNames = e.failedChecks.map((c) => c.name).join(", ")
+          yield* notifier.sendMessage(
+            `❌ <b>CI failed</b>\n<a href="${e.pr.html_url}">${e.pr.title}</a>\nFailed checks: ${failedCheckNames}`
+          )
+        })),
       Match.exhaustive
     )
 
