@@ -199,7 +199,7 @@ export const runEventLoop = Effect.gen(function*() {
         yield* Ref.set(planBuffer, [])
         yield* notifier.sendMessage({
           text: "Describe what you'd like to plan. Send your messages, then tap <b>Done</b> when ready.",
-          options: [{ label: DONE_BUTTON_LABEL }]
+          replyKeyboard: [{ label: DONE_BUTTON_LABEL }]
         })
         return
       }

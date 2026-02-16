@@ -412,7 +412,7 @@ describe("multi-step plan input", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: expect.stringContaining("Done"),
-          options: [{ label: "Done" }]
+          replyKeyboard: [{ label: "Done" }]
         })
       )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith("Planning started...")
