@@ -7,6 +7,7 @@ import { PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
 import type { AppEvent } from "../Events.js"
 import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
+import { AutoMerge } from "./AutoMerge.js"
 import { GitHubClient } from "./GitHubClient.js"
 import { LalphConfig } from "./LalphConfig.js"
 
@@ -51,6 +52,7 @@ export const GitHubEventSourceLive = Layer.effect(
     const config = yield* AppRuntimeConfig
     const lalphConfig = yield* LalphConfig
     const github = yield* GitHubClient
+    const autoMerge = yield* AutoMerge
     const interval = Duration.seconds(config.pollIntervalSeconds)
 
     const authenticatedUser = yield* github.getAuthenticatedUser().pipe(
@@ -141,6 +143,16 @@ export const GitHubEventSourceLive = Layer.effect(
           const maxId = Math.max(...filteredComments.map((c) => c.id))
           yield* Ref.update(lastCommentIdsRef, (m) => HashMap.set(m, pr.id, maxId))
         }
+      }
+
+      // Evaluate auto-merge for all open PRs
+      const allPRs = allPRsWithRepos.map(({ pr }) => pr)
+      const autoMergeEvents = yield* autoMerge.evaluatePRs(allPRs).pipe(
+        Effect.tapError((err) => Effect.logError(`AutoMerge evaluation failed: ${err.message}`)),
+        Effect.orElseSucceed(() => [] satisfies ReadonlyArray<AppEvent>)
+      )
+      for (const event of autoMergeEvents) {
+        events.push(event)
       }
 
       // Update state

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import type { AppEvent } from "../src/Events.js"
+import { PRAutoMerged } from "../src/Events.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
+import { AutoMerge } from "../src/services/AutoMerge.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
 import { GitHubEventSource, GitHubEventSourceLive } from "../src/services/GitHubEventSource.js"
 import { LalphConfig } from "../src/services/LalphConfig.js"
@@ -97,11 +99,22 @@ const makeGitHubClientMock = (overrides: Partial<{
     mergePR: vi.fn(() => Effect.succeed(undefined))
   })
 
+const makeAutoMergeMock = (overrides: Partial<{
+  evaluatePRs: (
+    prs: ReadonlyArray<GitHubPullRequest>
+  ) => Effect.Effect<ReadonlyArray<AppEvent>, never>
+}> = {}) =>
+  AutoMerge.of({
+    evaluatePRs: overrides.evaluatePRs ?? vi.fn(() => Effect.succeed([]))
+  })
+
 const makeTestLayer = (
   mock: ReturnType<typeof makeGitHubClientMock>,
-  repoFullName: string = "owner/my-repo"
+  repoFullName: string = "owner/my-repo",
+  autoMergeMock: ReturnType<typeof makeAutoMergeMock> = makeAutoMergeMock()
 ) =>
   GitHubEventSourceLive.pipe(
+    Layer.provide(Layer.succeed(AutoMerge, autoMergeMock)),
     Layer.provide(Layer.succeed(GitHubClient, mock)),
     Layer.provide(runtimeConfigLayer),
     Layer.provide(Layer.succeed(LalphConfig, makeLalphConfigMock(repoFullName)))
@@ -384,6 +397,33 @@ describe("GitHubEventSource", () => {
         expect(mock.listOpenPRs).not.toHaveBeenCalledWith(
           expect.objectContaining({ full_name: "owner/other-repo" })
         )
+      })
+    )
+  })
+
+  it.live("includes auto-merge events in poll cycle output", () => {
+    // Arrange
+    const pr = makePR({ id: 100 })
+    const mock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([pr]))
+    })
+    const autoMergeMock = makeAutoMergeMock({
+      evaluatePRs: vi.fn((prs: ReadonlyArray<GitHubPullRequest>) =>
+        Effect.succeed(prs.map((p) => new PRAutoMerged({ pr: p })))
+      )
+    })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(mock, "owner/my-repo", autoMergeMock)),
+      Effect.map((events) => {
+        // Assert
+        const autoMergeEvents = events.filter((e) => e._tag === "PRAutoMerged")
+        expect(autoMergeEvents).toHaveLength(1)
+        expect(getPRFromEvent(autoMergeEvents[0])?.id).toBe(100)
+        expect(autoMergeMock.evaluatePRs).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 100 })
+        ])
       })
     )
   })
