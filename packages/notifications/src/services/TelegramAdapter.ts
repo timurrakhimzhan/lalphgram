@@ -2,9 +2,9 @@
  * Telegram messenger adapter using the Telegraf library
  * @since 1.0.0
  */
-import { Effect, Layer, Option, Queue, Stream } from "effect"
-import { Telegraf } from "telegraf"
-import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "./MessengerAdapter.js"
+import { Effect, Layer, Option, Queue, Ref, Stream } from "effect"
+import { Markup, Telegraf } from "telegraf"
+import { IncomingMessage, MessengerAdapter, MessengerAdapterError, type OutgoingMessage } from "./MessengerAdapter.js"
 import { TelegramConfig } from "./TelegramConfig.js"
 
 /**
@@ -26,6 +26,26 @@ export const TelegramAdapterLive = Layer.scoped(
 
     const bot = new Telegraf(config.value.botToken)
     const messageQueue = yield* Queue.unbounded<IncomingMessage>()
+    const questionCounter = yield* Ref.make(0)
+
+    bot.action(/^q:(\d+):(.+)$/, (ctx) => {
+      const label = ctx.match[2] ?? ""
+      if (ctx.from != null) {
+        const msg = new IncomingMessage({
+          chatId: String(ctx.chat?.id ?? ""),
+          text: label,
+          from: ctx.from.username ?? ctx.from.first_name
+        })
+        Queue.unsafeOffer(messageQueue, msg)
+      }
+      Effect.runPromise(
+        Effect.tryPromise({
+          try: () => ctx.editMessageText(`${label} ✓`),
+          catch: () => new MessengerAdapterError({ message: "Failed to edit message", cause: null })
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      )
+      return ctx.answerCbQuery()
+    })
 
     bot.on("message", (ctx) => {
       const text = "text" in ctx.message ? ctx.message.text : undefined
@@ -54,7 +74,7 @@ export const TelegramAdapterLive = Layer.scoped(
       })
     )
 
-    const sendMessage = (text: string) =>
+    const sendMessage = (message: string | OutgoingMessage) =>
       Effect.gen(function*() {
         const currentConfig = yield* store.get
         const resolvedChatId = Option.isSome(currentConfig) ? currentConfig.value.chatId : null
@@ -64,14 +84,36 @@ export const TelegramAdapterLive = Layer.scoped(
             cause: null
           })
         }
-        yield* Effect.tryPromise({
-          try: () => bot.telegram.sendMessage(resolvedChatId, text, { parse_mode: "HTML" }),
-          catch: (err) =>
-            new MessengerAdapterError({
-              message: `Failed to send Telegram message: ${String(err)}`,
-              cause: err
-            })
-        })
+
+        if (typeof message === "string") {
+          yield* Effect.tryPromise({
+            try: () => bot.telegram.sendMessage(resolvedChatId, message, { parse_mode: "HTML" }),
+            catch: (err) =>
+              new MessengerAdapterError({
+                message: `Failed to send Telegram message: ${String(err)}`,
+                cause: err
+              })
+          })
+        } else {
+          const qId = yield* Ref.updateAndGet(questionCounter, (n) => n + 1)
+          const buttons = message.options?.map((o) => [
+            Markup.button.callback(o.label, `q:${qId}:${o.label}`)
+          ]) ?? []
+          const keyboard = buttons.length > 0 ? Markup.inlineKeyboard(buttons) : undefined
+
+          yield* Effect.tryPromise({
+            try: () =>
+              bot.telegram.sendMessage(resolvedChatId, message.text, {
+                ...keyboard,
+                parse_mode: "HTML"
+              }),
+            catch: (err) =>
+              new MessengerAdapterError({
+                message: `Failed to send Telegram message: ${String(err)}`,
+                cause: err
+              })
+          })
+        }
       })
 
     const incomingMessages = Stream.fromQueue(messageQueue)

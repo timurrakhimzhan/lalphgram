@@ -41,11 +41,23 @@ export const AppContextLive = Layer.effect(
   Effect.gen(function*() {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
-    const projectRoot = pathService.resolve(".")
-    const lalphPath = pathService.join(projectRoot, ".lalph")
-    const exists = yield* fs.exists(lalphPath)
 
-    if (!exists) {
+    let current = pathService.resolve(".")
+    let lalphPath: string | undefined
+
+    while (true) {
+      const candidate = pathService.join(current, ".lalph")
+      const exists = yield* fs.exists(candidate)
+      if (exists) {
+        lalphPath = candidate
+        break
+      }
+      const parent = pathService.dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+
+    if (lalphPath === undefined) {
       return yield* new AppContextError({
         message: "Could not find .lalph/ directory. Are you inside a lalph project?",
         cause: null
@@ -53,7 +65,7 @@ export const AppContextLive = Layer.effect(
     }
 
     return AppContext.of({
-      projectRoot,
+      projectRoot: pathService.dirname(lalphPath),
       configDir: pathService.join(lalphPath, "config")
     })
   })

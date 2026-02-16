@@ -112,3 +112,13 @@ export * from "./services/AutoMerge.js"
  * @since 1.0.0
  */
 export * from "./services/LalphConfig.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/PlanSession.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./lib/StreamJsonParser.js"

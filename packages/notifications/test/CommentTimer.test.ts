@@ -4,7 +4,7 @@ import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { CommentTimer, CommentTimerLive } from "../src/services/CommentTimer.js"
-import type { MessengerAdapterError } from "../src/services/MessengerAdapter.js"
+import type { MessengerAdapterError, OutgoingMessage } from "../src/services/MessengerAdapter.js"
 import { MessengerAdapter } from "../src/services/MessengerAdapter.js"
 import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker.js"
@@ -66,7 +66,7 @@ const makeTrackerMock = (overrides: Partial<{
 })
 
 const makeMessengerMock = (overrides: Partial<{
-  sendMessage: (text: string) => Effect.Effect<void, MessengerAdapterError>
+  sendMessage: (message: string | OutgoingMessage) => Effect.Effect<void, MessengerAdapterError>
 }> = {}) =>
   MessengerAdapter.of({
     sendMessage: overrides.sendMessage ?? vi.fn(() => Effect.succeed(undefined)),

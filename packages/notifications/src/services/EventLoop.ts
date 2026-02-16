@@ -13,6 +13,7 @@ import { GitHubEventSource, GitHubEventSourceLive } from "./GitHubEventSource.js
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
 import { MessengerAdapter } from "./MessengerAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
+import { PlanSession, PlanSessionLive } from "./PlanSession.js"
 import { TaskEventSource, TaskEventSourceLive } from "./TaskEventSource.js"
 import { TaskTracker } from "./TaskTracker.js"
 import { TelegramAdapterLive } from "./TelegramAdapter.js"
@@ -69,9 +70,13 @@ const commentTimerLayer = CommentTimerLive.pipe(
   Layer.provide(branchParserLayer)
 )
 
+const planSessionLayer = PlanSessionLive.pipe(
+  Layer.provide(lalphConfigLayer)
+)
+
 /**
  * The main layer providing all services for the event loop.
- * Requires AppRuntimeConfig and TelegramConfigStore to be provided externally.
+ * Requires AppRuntimeConfig, TelegramConfigStore, and PlanCommandBuilder to be provided externally.
  * @since 1.0.0
  * @category layers
  */
@@ -80,7 +85,8 @@ export const MainLayer = Layer.mergeAll(
   servicesLayer,
   eventSourcesLayer,
   commentTimerLayer,
-  branchParserLayer
+  branchParserLayer,
+  planSessionLayer
 )
 
 /**
@@ -96,6 +102,7 @@ export const runEventLoop = Effect.gen(function*() {
   const timer = yield* CommentTimer
   const tracker = yield* TaskTracker
   const branchParser = yield* BranchParser
+  const planSession = yield* PlanSession
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -179,12 +186,73 @@ export const runEventLoop = Effect.gen(function*() {
       Match.exhaustive
     )
 
+  const handleIncomingMessage = (msg: { text: string }) =>
+    Effect.gen(function*() {
+      if (msg.text.startsWith("/plan ")) {
+        const planText = msg.text.slice("/plan ".length).trim()
+        if (planText.length === 0) {
+          yield* notifier.sendMessage("Usage: /plan <description>")
+          return
+        }
+        yield* planSession.start(planText).pipe(
+          Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
+          Effect.orElseSucceed(() => undefined)
+        )
+        yield* notifier.sendMessage("Planning started...")
+        return
+      }
+      const active = yield* planSession.isActive
+      if (active) {
+        yield* planSession.answer(msg.text).pipe(
+          Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
+          Effect.orElseSucceed(() => undefined)
+        )
+      }
+    })
+
+  const incomingMessageStream = notifier.incomingMessages.pipe(
+    Stream.mapEffect((msg) =>
+      handleIncomingMessage(msg).pipe(
+        Effect.catchAll((err) => Effect.logError(`Incoming message error: ${String(err)}`))
+      )
+    )
+  )
+
+  const planEventStream = planSession.events.pipe(
+    Stream.mapEffect((event) =>
+      Match.value(event).pipe(
+        Match.tag("PlanTextOutput", (e) => notifier.sendMessage(e.text.slice(0, 4096))),
+        Match.tag("PlanQuestion", (e) =>
+          Effect.forEach(e.questions, (q) =>
+            notifier.sendMessage({
+              text: q.question,
+              options: q.options?.map((o) => ({ label: o.label }))
+            }))),
+        Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
+        Match.tag("PlanFailed", (e) => notifier.sendMessage(`Plan failed: ${e.message}`)),
+        Match.exhaustive
+      ).pipe(
+        Effect.catchAll((err) => Effect.logError(`Plan event relay error: ${String(err)}`))
+      )
+    )
+  )
+
   const mergedStream = Stream.merge(
     githubEvents.stream,
     taskEvents.stream
   )
 
   yield* Console.log("Notification service started. Press Ctrl+C to stop.")
+
+  yield* Stream.merge(
+    incomingMessageStream,
+    planEventStream
+  ).pipe(
+    Stream.runDrain,
+    Effect.annotateLogs("service", "PlanSession"),
+    Effect.catchAll((err) => Effect.logError(`Plan stream error: ${String(err)}`)),
+    Effect.forkDaemon
+  )
 
   yield* mergedStream.pipe(
     Stream.runForEach((event) =>

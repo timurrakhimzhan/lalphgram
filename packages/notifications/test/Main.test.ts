@@ -20,6 +20,7 @@ import { GitHubClient } from "../src/services/GitHubClient.js"
 import { GitHubEventSource } from "../src/services/GitHubEventSource.js"
 import type { GitHubEventSourceError } from "../src/services/GitHubEventSource.js"
 import { MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
+import { PlanSession } from "../src/services/PlanSession.js"
 import { TaskEventSource } from "../src/services/TaskEventSource.js"
 import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
 import { TaskTracker } from "../src/services/TaskTracker.js"
@@ -125,6 +126,13 @@ const makeTestLayer = (
   const trackerMock = overrides.trackerMock ?? makeTrackerMock()
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
 
+  const planSessionMock = PlanSession.of({
+    start: vi.fn(() => Effect.succeed(undefined)),
+    answer: vi.fn(() => Effect.succeed(undefined)),
+    isActive: Effect.succeed(false),
+    events: Stream.never
+  })
+
   return {
     layer: Layer.mergeAll(
       Layer.succeed(GitHubEventSource, githubEventSourceMock),
@@ -133,6 +141,7 @@ const makeTestLayer = (
       Layer.succeed(GitHubClient, githubClientMock),
       Layer.succeed(TaskTracker, trackerMock),
       Layer.succeed(CommentTimer, commentTimerMock),
+      Layer.succeed(PlanSession, planSessionMock),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
       BranchParserLive
     ),

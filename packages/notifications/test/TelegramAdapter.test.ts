@@ -9,14 +9,22 @@ const sendMessageMock = vi.fn().mockResolvedValue({ message_id: 1 })
 const launchMock = vi.fn().mockResolvedValue(undefined)
 const stopMock = vi.fn()
 const onMock = vi.fn()
+const actionMock = vi.fn()
 
 vi.mock("telegraf", () => ({
   Telegraf: vi.fn().mockImplementation(() => ({
     telegram: { sendMessage: sendMessageMock },
     launch: launchMock,
     stop: stopMock,
-    on: onMock
-  }))
+    on: onMock,
+    action: actionMock
+  })),
+  Markup: {
+    button: {
+      callback: vi.fn((label: string, data: string) => ({ text: label, callback_data: data }))
+    },
+    inlineKeyboard: vi.fn((buttons: Array<Array<unknown>>) => ({ reply_markup: { inline_keyboard: buttons } }))
+  }
 }))
 
 const makeStoreWithConfig = (config: TelegramConfigSchema | null) => {
@@ -43,6 +51,7 @@ describe("MessengerAdapter", () => {
     const sendMessageFn = vi.fn(() => Effect.succeed(undefined))
     const mockAdapter = MessengerAdapter.of({
       sendMessage: sendMessageFn,
+
       incomingMessages: Stream.empty
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -65,6 +74,7 @@ describe("MessengerAdapter", () => {
     // Arrange
     const mockAdapter = MessengerAdapter.of({
       sendMessage: vi.fn(() => Effect.fail(new MessengerAdapterError({ message: "Send failed", cause: null }))),
+
       incomingMessages: Stream.empty
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -90,6 +100,7 @@ describe("MessengerAdapter", () => {
     const msg2 = new IncomingMessage({ chatId: "123", text: "World", from: "bob" })
     const mockAdapter = MessengerAdapter.of({
       sendMessage: vi.fn(() => Effect.succeed(undefined)),
+
       incomingMessages: Stream.make(msg1, msg2)
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -115,6 +126,7 @@ describe("TelegramAdapterLive", () => {
     launchMock.mockClear()
     stopMock.mockClear()
     onMock.mockClear()
+    actionMock.mockClear()
   })
 
   it.effect("sendMessage calls bot.telegram.sendMessage with correct parameters", () => {

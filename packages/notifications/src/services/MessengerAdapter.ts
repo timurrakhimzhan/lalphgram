@@ -26,10 +26,19 @@ export class IncomingMessage extends Schema.Class<IncomingMessage>("IncomingMess
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface OutgoingMessage {
+  readonly text: string
+  readonly options?: ReadonlyArray<{ readonly label: string }> | undefined
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface MessengerAdapterService {
-  readonly sendMessage: (text: string) => Effect.Effect<void, MessengerAdapterError>
+  readonly sendMessage: (message: string | OutgoingMessage) => Effect.Effect<void, MessengerAdapterError>
   readonly incomingMessages: Stream.Stream<IncomingMessage, MessengerAdapterError>
 }
 
