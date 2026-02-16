@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 import { PRCommentAdded, PRConflictDetected, PROpened, TaskCreated, TaskUpdated } from "../src/Events.js"
 import type { AppEvent } from "../src/Events.js"
+import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
@@ -13,8 +14,8 @@ import type { GitHubEventSourceError } from "../src/services/GitHubEventSource.j
 import { MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
 import { TaskEventSource } from "../src/services/TaskEventSource.js"
 import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
+import { TaskTracker } from "../src/services/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker.js"
-import { TrackerResolver } from "../src/services/TrackerResolver.js"
 
 const testRuntimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,
@@ -92,13 +93,6 @@ const makeTrackerMock = (): TaskTrackerService => ({
   getIssue: vi.fn(() => Effect.succeed(makeIssue()))
 })
 
-const makeTrackerResolverMock = (trackerMock: TaskTrackerService) =>
-  TrackerResolver.of({
-    trackerForRepo: vi.fn(() => Effect.succeed(trackerMock)),
-    allTrackers: [trackerMock],
-    allWatchedRepos: ["owner/repo"]
-  })
-
 const makeCommentTimerMock = () =>
   CommentTimer.of({
     handleComment: vi.fn(() => Effect.succeed(undefined)),
@@ -111,7 +105,6 @@ const makeTestLayer = (
     messengerMock?: ReturnType<typeof makeMessengerMock>
     githubClientMock?: ReturnType<typeof makeGitHubClientMock>
     trackerMock?: TaskTrackerService
-    resolverMock?: ReturnType<typeof makeTrackerResolverMock>
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
   } = {}
 ) => {
@@ -119,7 +112,6 @@ const makeTestLayer = (
   const messengerMock = overrides.messengerMock ?? makeMessengerMock()
   const githubClientMock = overrides.githubClientMock ?? makeGitHubClientMock()
   const trackerMock = overrides.trackerMock ?? makeTrackerMock()
-  const resolverMock = overrides.resolverMock ?? makeTrackerResolverMock(trackerMock)
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
 
   return {
@@ -128,14 +120,14 @@ const makeTestLayer = (
       Layer.succeed(TaskEventSource, taskEventSourceMock),
       Layer.succeed(MessengerAdapter, messengerMock),
       Layer.succeed(GitHubClient, githubClientMock),
-      Layer.succeed(TrackerResolver, resolverMock),
+      Layer.succeed(TaskTracker, trackerMock),
       Layer.succeed(CommentTimer, commentTimerMock),
-      Layer.succeed(AppRuntimeConfig, testRuntimeConfig)
+      Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
+      BranchParserLive
     ),
     messengerMock,
     githubClientMock,
     trackerMock,
-    resolverMock,
     commentTimerMock
   }
 }
@@ -204,9 +196,8 @@ describe("event loop dispatch", () => {
     const event = new PRConflictDetected({ pr })
     const githubClientMock = makeGitHubClientMock()
     const trackerMock = makeTrackerMock()
-    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([event], { githubClientMock, trackerMock, resolverMock, messengerMock })
+    const { layer } = makeTestLayer([event], { githubClientMock, trackerMock, messengerMock })
 
     // Act & Assert
     return Effect.gen(function*() {
@@ -217,7 +208,7 @@ describe("event loop dispatch", () => {
         1,
         "This PR has merge conflicts that need to be resolved."
       )
-      expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123/feature")
+      expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("<b>Conflict detected</b>")
       )

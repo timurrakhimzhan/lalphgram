@@ -5,7 +5,7 @@ import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchema
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
 import { GitHubEventSource, GitHubEventSourceLive } from "../src/services/GitHubEventSource.js"
-import { TrackerResolver } from "../src/services/TrackerResolver.js"
+import { LalphConfig } from "../src/services/LalphConfig.js"
 
 const testRepo = new GitHubRepo({
   id: 1,
@@ -65,6 +65,14 @@ const runtimeConfig = new RuntimeConfig({
 
 const runtimeConfigLayer = Layer.succeed(AppRuntimeConfig, runtimeConfig)
 
+const makeLalphConfigMock = (repoFullName: string) =>
+  LalphConfig.of({
+    githubToken: Effect.succeed("test-token"),
+    linearToken: Effect.succeed("test-linear-token"),
+    issueSource: "github",
+    repoFullName
+  })
+
 const makeGitHubClientMock = (overrides: Partial<{
   getAuthenticatedUser: () => Effect.Effect<{ readonly login: string }, GitHubClientError>
   listUserRepos: () => Effect.Effect<ReadonlyArray<GitHubRepo>, GitHubClientError>
@@ -85,37 +93,14 @@ const makeGitHubClientMock = (overrides: Partial<{
     listReviewComments: overrides.listReviewComments ?? vi.fn(() => Effect.succeed([]))
   })
 
-const makeTrackerResolverMock = (watchedRepos: ReadonlyArray<string> = []) =>
-  TrackerResolver.of({
-    trackerForRepo: vi.fn(() =>
-      Effect.succeed({
-        getRecentEvents: vi.fn(() => Effect.succeed([])),
-        moveToTodo: vi.fn(() => Effect.succeed(undefined)),
-        setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
-        getIssue: vi.fn(() =>
-          Effect.succeed({
-            id: "ISSUE-1",
-            title: "Test Issue",
-            state: "In Progress",
-            url: "https://example.com",
-            createdAt: "2024-01-15T10:00:00Z",
-            updatedAt: "2024-01-15T10:00:00Z"
-          })
-        )
-      })
-    ),
-    allTrackers: [],
-    allWatchedRepos: [...watchedRepos]
-  })
-
 const makeTestLayer = (
   mock: ReturnType<typeof makeGitHubClientMock>,
-  watchedRepos: ReadonlyArray<string> = []
+  repoFullName: string = "owner/my-repo"
 ) =>
   GitHubEventSourceLive.pipe(
     Layer.provide(Layer.succeed(GitHubClient, mock)),
     Layer.provide(runtimeConfigLayer),
-    Layer.provide(Layer.succeed(TrackerResolver, makeTrackerResolverMock(watchedRepos)))
+    Layer.provide(Layer.succeed(LalphConfig, makeLalphConfigMock(repoFullName)))
   )
 
 const takeEvents = (n: number) =>
@@ -371,7 +356,7 @@ describe("GitHubEventSource", () => {
     )
   })
 
-  it.live("filters repos when watchedRepos is specified", () => {
+  it.live("filters repos to only the configured repo", () => {
     // Arrange
     const pr1 = makePR({ id: 100, repo: "owner/my-repo" })
     const pr2 = makePR({ id: 200, number: 2, repo: "owner/other-repo" })
@@ -386,41 +371,13 @@ describe("GitHubEventSource", () => {
 
     // Act
     return collectEventsFor(50).pipe(
-      Effect.provide(makeTestLayer(mock, ["owner/my-repo"])),
+      Effect.provide(makeTestLayer(mock, "owner/my-repo")),
       Effect.map((_events) => {
         // Assert
         expect(mock.listOpenPRs).toHaveBeenCalledWith(
           expect.objectContaining({ full_name: "owner/my-repo" })
         )
         expect(mock.listOpenPRs).not.toHaveBeenCalledWith(
-          expect.objectContaining({ full_name: "owner/other-repo" })
-        )
-      })
-    )
-  })
-
-  it.live("watches all repos when watchedRepos is empty", () => {
-    // Arrange
-    const pr1 = makePR({ id: 100, repo: "owner/my-repo" })
-    const pr2 = makePR({ id: 200, number: 2, repo: "owner/other-repo" })
-    const mock = makeGitHubClientMock({
-      listUserRepos: vi.fn(() => Effect.succeed([testRepo, testRepo2])),
-      listOpenPRs: vi.fn((repo: GitHubRepo) => {
-        if (repo.full_name === "owner/my-repo") return Effect.succeed([pr1])
-        if (repo.full_name === "owner/other-repo") return Effect.succeed([pr2])
-        return Effect.succeed([])
-      })
-    })
-
-    // Act
-    return collectEventsFor(50).pipe(
-      Effect.provide(makeTestLayer(mock, [])),
-      Effect.map((_events) => {
-        // Assert
-        expect(mock.listOpenPRs).toHaveBeenCalledWith(
-          expect.objectContaining({ full_name: "owner/my-repo" })
-        )
-        expect(mock.listOpenPRs).toHaveBeenCalledWith(
           expect.objectContaining({ full_name: "owner/other-repo" })
         )
       })

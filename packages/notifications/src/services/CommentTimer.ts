@@ -3,11 +3,11 @@
  * @since 1.0.0
  */
 import { Context, Data, Duration, Effect, Fiber, HashMap, Layer, Option, Ref } from "effect"
-import { extractIssueId } from "../lib/BranchParser.js"
+import { BranchParser } from "../lib/BranchParser.js"
 import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubComment, GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { MessengerAdapter } from "./MessengerAdapter.js"
-import { TrackerResolver } from "./TrackerResolver.js"
+import { TaskTracker } from "./TaskTracker.js"
 
 /**
  * @since 1.0.0
@@ -44,8 +44,9 @@ export const CommentTimerLive = Layer.effect(
   CommentTimer,
   Effect.gen(function*() {
     const config = yield* AppRuntimeConfig
-    const resolver = yield* TrackerResolver
+    const tracker = yield* TaskTracker
     const notifier = yield* MessengerAdapter
+    const branchParser = yield* BranchParser
 
     const timersRef = yield* Ref.make(HashMap.empty<string, Fiber.RuntimeFiber<void, never>>())
 
@@ -53,7 +54,7 @@ export const CommentTimerLive = Layer.effect(
 
     const handleComment = (pr: GitHubPullRequest, comment: GitHubComment) =>
       Effect.gen(function*() {
-        const issueIdOption = extractIssueId(pr.headRef)
+        const issueIdOption = branchParser.resolveIssueId(pr)
 
         if (Option.isNone(issueIdOption)) {
           yield* Effect.logWarning("No issue ID found in branch name").pipe(
@@ -66,15 +67,6 @@ export const CommentTimerLive = Layer.effect(
         const issueId = issueIdOption.value
         const key = prKey(pr)
         const keyword = config.triggerKeyword
-
-        const tracker = yield* resolver.trackerForRepo(pr.repo).pipe(
-          Effect.mapError((err) =>
-            new CommentTimerError({
-              message: `Failed to resolve tracker for repo ${pr.repo}: ${err.message}`,
-              cause: err
-            })
-          )
-        )
 
         if (comment.body.toLowerCase().includes(keyword.toLowerCase())) {
           yield* tracker.moveToTodo(issueId).pipe(

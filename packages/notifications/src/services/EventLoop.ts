@@ -2,18 +2,20 @@
  * Event loop and layer construction for the notification service
  * @since 1.0.0
  */
-import { Console, Effect, Layer, Match, Stream } from "effect"
+import { Console, Effect, Layer, Match, Option, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
+import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { GitHubEventSource, GitHubEventSourceLive } from "./GitHubEventSource.js"
-import { LalphConfigLive } from "./LalphConfig.js"
+import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
 import { MessengerAdapter } from "./MessengerAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
 import { TaskEventSource, TaskEventSourceLive } from "./TaskEventSource.js"
+import { TaskTracker } from "./TaskTracker.js"
 import { TelegramAdapterLive } from "./TelegramAdapter.js"
-import { TrackerResolver, TrackerResolverLive } from "./TrackerResolver.js"
+import { TrackerLayerMap } from "./TrackerLayerMap.js"
 
 const lalphConfigLayer = LalphConfigLive
 
@@ -23,15 +25,25 @@ const octokitLayer = OctokitClientLive.pipe(
 
 const telegramAdapterLayer = TelegramAdapterLive
 
-const trackerResolverLayer = TrackerResolverLive.pipe(
+const trackerLayerMapLayer = TrackerLayerMap.Default.pipe(
   Layer.provide(octokitLayer),
+  Layer.provide(lalphConfigLayer)
+)
+
+const taskTrackerLayer = Layer.unwrapEffect(
+  Effect.gen(function*() {
+    const config = yield* LalphConfig
+    return TrackerLayerMap.get(config.issueSource)
+  })
+).pipe(
+  Layer.provide(trackerLayerMapLayer),
   Layer.provide(lalphConfigLayer)
 )
 
 const servicesLayer = Layer.mergeAll(
   GitHubClientLive,
   telegramAdapterLayer,
-  trackerResolverLayer
+  taskTrackerLayer
 ).pipe(
   Layer.provide(octokitLayer)
 )
@@ -40,11 +52,15 @@ const eventSourcesLayer = Layer.mergeAll(
   GitHubEventSourceLive,
   TaskEventSourceLive
 ).pipe(
-  Layer.provide(servicesLayer)
+  Layer.provide(servicesLayer),
+  Layer.provide(lalphConfigLayer)
 )
 
+const branchParserLayer = BranchParserLive
+
 const commentTimerLayer = CommentTimerLive.pipe(
-  Layer.provide(servicesLayer)
+  Layer.provide(servicesLayer),
+  Layer.provide(branchParserLayer)
 )
 
 /**
@@ -57,7 +73,8 @@ export const MainLayer = Layer.mergeAll(
   lalphConfigLayer,
   servicesLayer,
   eventSourcesLayer,
-  commentTimerLayer
+  commentTimerLayer,
+  branchParserLayer
 )
 
 /**
@@ -71,7 +88,8 @@ export const runEventLoop = Effect.gen(function*() {
   const notifier = yield* MessengerAdapter
   const github = yield* GitHubClient
   const timer = yield* CommentTimer
-  const resolver = yield* TrackerResolver
+  const tracker = yield* TaskTracker
+  const branchParser = yield* BranchParser
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -96,23 +114,24 @@ export const runEventLoop = Effect.gen(function*() {
             e.pr.number,
             "This PR has merge conflicts that need to be resolved."
           )
-          const issueId = e.pr.headRef
-          const tracker = yield* resolver.trackerForRepo(e.pr.repo).pipe(
-            Effect.tapError((err) =>
-              Effect.logWarning(`No tracker for repo ${e.pr.repo}: ${err.message}`)
-            ),
-            Effect.orElseSucceed(() =>
-              undefined
-            )
-          )
-          if (tracker !== undefined) {
+          const issueIdOption = branchParser.resolveIssueId(e.pr)
+          if (Option.isSome(issueIdOption)) {
+            const issueId = issueIdOption.value
             yield* tracker.moveToTodo(issueId).pipe(
-              Effect.tapError((err) => Effect.logError(`Failed to move to todo: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
+              Effect.tapError((err) =>
+                Effect.logError(`Failed to move to todo: ${err.message}`)
+              ),
+              Effect.orElseSucceed(() =>
+                undefined
+              )
             )
             yield* tracker.setPriorityUrgent(issueId).pipe(
               Effect.tapError((err) => Effect.logError(`Failed to set priority: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
+            )
+          } else {
+            yield* Effect.logWarning("No issue ID found in branch name").pipe(
+              Effect.annotateLogs("branch", e.pr.headRef)
             )
           }
           yield* notifier.sendMessage(

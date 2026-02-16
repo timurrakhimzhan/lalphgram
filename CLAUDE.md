@@ -58,6 +58,19 @@ it.effect("creates an item with the given name", () =>
 - **Provide all layer implementations in the root file (Main.ts)** — never provide the same service in multiple places. Providing a layer more than once creates duplicate instances, leading to inconsistent state
 - **Never inline `Effect.provide` inside `Effect.gen`** — don't write `yield* someEffect.pipe(Effect.provide(layer))`. Services are accessed via `yield* ServiceTag`, and layers are provided externally
 - **The only inline `Effect.provide` in production code is `LayerMap.get()`** — when the layer is selected dynamically at runtime (e.g. `Effect.provide(DataSourceMap.get(key))`). All other dependencies are wired at the root
+- **Use `LayerMap.Service` for dynamic layer selection** — when a service implementation is chosen at runtime (e.g. based on config), define a `LayerMap.Service` with a `lookup` function or `layers` record. Use `MyMap.get(key)` with `Effect.provide` — this is the ONE allowed inline provide:
+
+  ```typescript
+  class TrackerMap extends LayerMap.Service<TrackerMap>()("TrackerMap", {
+    layers: {
+      linear: LinearTrackerLive,
+      github: GitHubIssueTrackerLive
+    }
+  }) {}
+
+  // Usage inside Layer.effect: Effect.provide(TrackerMap.get("linear"))
+  // Wire TrackerMap.Default in the root layer composition
+  ```
 - **In tests, compose a `TestLayer` and provide it at the outer pipe** — never inline `Effect.provide` inside the generator body. Build layers in Arrange, provide at the `.pipe(...)` boundary:
 
 ```typescript

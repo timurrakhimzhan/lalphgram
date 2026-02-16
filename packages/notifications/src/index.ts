@@ -91,7 +91,7 @@ export * from "./services/TelegramAdapter.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/TrackerResolver.js"
+export * from "./services/TrackerLayerMap.js"
 
 /**
  * @since 1.0.0
