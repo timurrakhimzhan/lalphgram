@@ -194,7 +194,9 @@ export const runEventLoop = Effect.gen(function*() {
 
   const handleIncomingMessage = (msg: { text: string }) =>
     Effect.gen(function*() {
+      yield* Effect.log(`Incoming message: ${msg.text}`)
       if (msg.text === PLAN_BUTTON_LABEL) {
+        yield* Effect.log("Plan collection started")
         yield* Ref.set(collectingPlan, true)
         yield* Ref.set(planBuffer, [])
         yield* notifier.sendMessage({
@@ -210,9 +212,13 @@ export const runEventLoop = Effect.gen(function*() {
         yield* Ref.set(planBuffer, [])
         const joinedText = messages.join("\n")
         if (joinedText.trim().length === 0) {
+          yield* Effect.log("Plan collection done with empty buffer")
           yield* notifier.sendMessage("No plan description provided.")
           return
         }
+        yield* Effect.log("Plan collection done, starting session").pipe(
+          Effect.annotateLogs("planText", joinedText)
+        )
         yield* planSession.start(joinedText).pipe(
           Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
           Effect.orElseSucceed(() => undefined)
@@ -221,17 +227,21 @@ export const runEventLoop = Effect.gen(function*() {
         return
       }
       if (isCollecting) {
+        yield* Effect.log("Buffering plan message").pipe(
+          Effect.annotateLogs("bufferedText", msg.text)
+        )
         yield* Ref.update(planBuffer, (buf) => [...buf, msg.text])
         return
       }
       const active = yield* planSession.isActive
       if (active) {
+        yield* Effect.log("Forwarding answer to plan session")
         yield* planSession.answer(msg.text).pipe(
           Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
           Effect.orElseSucceed(() => undefined)
         )
       }
-    })
+    }).pipe(Effect.annotateLogs("service", "PlanInput"))
 
   const incomingMessageStream = notifier.incomingMessages.pipe(
     Stream.mapEffect((msg) =>
