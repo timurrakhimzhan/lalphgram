@@ -106,4 +106,9 @@ export * from "./services/AppContext.js"
 /**
  * @since 1.0.0
  */
+export * from "./services/AutoMerge.js"
+
+/**
+ * @since 1.0.0
+ */
 export * from "./services/LalphConfig.js"
