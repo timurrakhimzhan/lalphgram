@@ -143,6 +143,15 @@ export const runEventLoop = Effect.gen(function*() {
           Effect.tapError((err) => Effect.logError(`Comment timer error: ${err.message}`)),
           Effect.orElseSucceed(() => undefined)
         )),
+      Match.tag("PRAutoMerged", (e) =>
+        Effect.logInfo("PR auto-merged").pipe(
+          Effect.annotateLogs("pr", e.pr.html_url)
+        )),
+      Match.tag("PRCIFailed", (e) =>
+        Effect.logInfo("PR CI failed").pipe(
+          Effect.annotateLogs("pr", e.pr.html_url),
+          Effect.annotateLogs("failedChecks", String(e.failedChecks.length))
+        )),
       Match.exhaustive
     )
 
