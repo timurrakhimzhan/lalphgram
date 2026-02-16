@@ -7,13 +7,15 @@ import { preferGetResult } from "./rules/prefer-get-result.js"
 import { enforceServiceOfMock } from "./rules/enforce-service-of-mock.js"
 import { noCatchAllRecovery } from "./rules/no-catch-all-recovery.js"
 import { noSilentErrorCatch } from "./rules/no-silent-error-catch.js"
+import { noEffectfulFunction } from "./rules/no-effectful-function.js"
 
 export const rules = {
   "no-direct-result-tag": noDirectResultTag,
   "prefer-get-result": preferGetResult,
   "enforce-service-of-mock": enforceServiceOfMock,
   "no-catch-all-recovery": noCatchAllRecovery,
-  "no-silent-error-catch": noSilentErrorCatch
+  "no-silent-error-catch": noSilentErrorCatch,
+  "no-effectful-function": noEffectfulFunction
 }
 
 export const configs = {

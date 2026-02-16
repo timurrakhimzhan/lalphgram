@@ -2,26 +2,19 @@ import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 import { PRCommentAdded, PRConflictDetected, PROpened, TaskCreated, TaskUpdated } from "../src/Events.js"
 import type { AppEvent } from "../src/Events.js"
-import { runEventLoop } from "../src/Main.js"
-import { AppCredentials, AppRuntimeConfig, Credentials, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
+import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
+import { runEventLoop } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
 import { GitHubEventSource } from "../src/services/GitHubEventSource.js"
 import type { GitHubEventSourceError } from "../src/services/GitHubEventSource.js"
 import { MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
 import { TaskEventSource } from "../src/services/TaskEventSource.js"
 import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
-import { TaskTracker } from "../src/services/TaskTracker.js"
-
-const testCredentials = new Credentials({
-  backend: "github",
-  githubToken: "test-token",
-  telegramBotToken: "bot-token",
-  telegramChatId: "chat-id",
-  linearApiKey: ""
-})
+import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import { TrackerResolver } from "../src/services/TrackerResolver.js"
 
 const testRuntimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,
@@ -92,12 +85,18 @@ const makeGitHubClientMock = () =>
     listReviewComments: vi.fn(() => Effect.succeed([]))
   })
 
-const makeTaskTrackerMock = () =>
-  TaskTracker.of({
-    getRecentEvents: vi.fn(() => Effect.succeed([])),
-    moveToTodo: vi.fn(() => Effect.succeed(undefined)),
-    setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
-    getIssue: vi.fn(() => Effect.succeed(makeIssue()))
+const makeTrackerMock = (): TaskTrackerService => ({
+  getRecentEvents: vi.fn(() => Effect.succeed([])),
+  moveToTodo: vi.fn(() => Effect.succeed(undefined)),
+  setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
+  getIssue: vi.fn(() => Effect.succeed(makeIssue()))
+})
+
+const makeTrackerResolverMock = (trackerMock: TaskTrackerService) =>
+  TrackerResolver.of({
+    trackerForRepo: vi.fn(() => Effect.succeed(trackerMock)),
+    allTrackers: [trackerMock],
+    allWatchedRepos: ["owner/repo"]
   })
 
 const makeCommentTimerMock = () =>
@@ -111,14 +110,16 @@ const makeTestLayer = (
   overrides: {
     messengerMock?: ReturnType<typeof makeMessengerMock>
     githubClientMock?: ReturnType<typeof makeGitHubClientMock>
-    trackerMock?: ReturnType<typeof makeTaskTrackerMock>
+    trackerMock?: TaskTrackerService
+    resolverMock?: ReturnType<typeof makeTrackerResolverMock>
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
   } = {}
 ) => {
   const { githubEventSourceMock, taskEventSourceMock } = makeEventSourcesFromEvents(events)
   const messengerMock = overrides.messengerMock ?? makeMessengerMock()
   const githubClientMock = overrides.githubClientMock ?? makeGitHubClientMock()
-  const trackerMock = overrides.trackerMock ?? makeTaskTrackerMock()
+  const trackerMock = overrides.trackerMock ?? makeTrackerMock()
+  const resolverMock = overrides.resolverMock ?? makeTrackerResolverMock(trackerMock)
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
 
   return {
@@ -127,14 +128,14 @@ const makeTestLayer = (
       Layer.succeed(TaskEventSource, taskEventSourceMock),
       Layer.succeed(MessengerAdapter, messengerMock),
       Layer.succeed(GitHubClient, githubClientMock),
-      Layer.succeed(TaskTracker, trackerMock),
+      Layer.succeed(TrackerResolver, resolverMock),
       Layer.succeed(CommentTimer, commentTimerMock),
-      Layer.succeed(AppCredentials, testCredentials),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig)
     ),
     messengerMock,
     githubClientMock,
     trackerMock,
+    resolverMock,
     commentTimerMock
   }
 }
@@ -202,9 +203,10 @@ describe("event loop dispatch", () => {
     })
     const event = new PRConflictDetected({ pr })
     const githubClientMock = makeGitHubClientMock()
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([event], { githubClientMock, trackerMock, messengerMock })
+    const { layer } = makeTestLayer([event], { githubClientMock, trackerMock, resolverMock, messengerMock })
 
     // Act & Assert
     return Effect.gen(function*() {

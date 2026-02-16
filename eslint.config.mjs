@@ -74,6 +74,7 @@ export default [
 
       "@template/no-catch-all-recovery": "error",
       "@template/no-silent-error-catch": "error",
+      "@template/no-effectful-function": "error",
 
       "no-unused-vars": "off",
       "prefer-rest-params": "off",
@@ -135,7 +136,8 @@ export default [
   {
     files: ["**/test/**/*.ts"],
     rules: {
-      "@template/enforce-service-of-mock": "error"
+      "@template/enforce-service-of-mock": "error",
+      "@template/no-effectful-function": "off"
     }
   }
 ]

@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import type { AppEvent } from "../src/Events.js"
-import { AppCredentials, AppRuntimeConfig, Credentials, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
+import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
 import { GitHubEventSource, GitHubEventSourceLive } from "../src/services/GitHubEventSource.js"
+import { TrackerResolver } from "../src/services/TrackerResolver.js"
 
 const testRepo = new GitHubRepo({
   id: 1,
@@ -84,13 +85,27 @@ const makeGitHubClientMock = (overrides: Partial<{
     listReviewComments: overrides.listReviewComments ?? vi.fn(() => Effect.succeed([]))
   })
 
-const makeCredentials = (watchedRepos: ReadonlyArray<string> = []) =>
-  new Credentials({
-    backend: "github",
-    githubToken: "test-token",
-    telegramBotToken: "test-bot-token",
-    telegramChatId: "test-chat-id",
-    watchedRepos: [...watchedRepos]
+const makeTrackerResolverMock = (watchedRepos: ReadonlyArray<string> = []) =>
+  TrackerResolver.of({
+    trackerForRepo: vi.fn(() =>
+      Effect.succeed({
+        getRecentEvents: vi.fn(() => Effect.succeed([])),
+        moveToTodo: vi.fn(() => Effect.succeed(undefined)),
+        setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
+        getIssue: vi.fn(() =>
+          Effect.succeed({
+            id: "ISSUE-1",
+            title: "Test Issue",
+            state: "In Progress",
+            url: "https://example.com",
+            createdAt: "2024-01-15T10:00:00Z",
+            updatedAt: "2024-01-15T10:00:00Z"
+          })
+        )
+      })
+    ),
+    allTrackers: [],
+    allWatchedRepos: [...watchedRepos]
   })
 
 const makeTestLayer = (
@@ -100,7 +115,7 @@ const makeTestLayer = (
   GitHubEventSourceLive.pipe(
     Layer.provide(Layer.succeed(GitHubClient, mock)),
     Layer.provide(runtimeConfigLayer),
-    Layer.provide(Layer.succeed(AppCredentials, makeCredentials(watchedRepos)))
+    Layer.provide(Layer.succeed(TrackerResolver, makeTrackerResolverMock(watchedRepos)))
   )
 
 const takeEvents = (n: number) =>

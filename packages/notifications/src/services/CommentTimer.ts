@@ -7,7 +7,7 @@ import { extractIssueId } from "../lib/BranchParser.js"
 import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubComment, GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { MessengerAdapter } from "./MessengerAdapter.js"
-import { TaskTracker } from "./TaskTracker.js"
+import { TrackerResolver } from "./TrackerResolver.js"
 
 /**
  * @since 1.0.0
@@ -44,7 +44,7 @@ export const CommentTimerLive = Layer.effect(
   CommentTimer,
   Effect.gen(function*() {
     const config = yield* AppRuntimeConfig
-    const tracker = yield* TaskTracker
+    const resolver = yield* TrackerResolver
     const notifier = yield* MessengerAdapter
 
     const timersRef = yield* Ref.make(HashMap.empty<string, Fiber.RuntimeFiber<void, never>>())
@@ -66,6 +66,15 @@ export const CommentTimerLive = Layer.effect(
         const issueId = issueIdOption.value
         const key = prKey(pr)
         const keyword = config.triggerKeyword
+
+        const tracker = yield* resolver.trackerForRepo(pr.repo).pipe(
+          Effect.mapError((err) =>
+            new CommentTimerError({
+              message: `Failed to resolve tracker for repo ${pr.repo}: ${err.message}`,
+              cause: err
+            })
+          )
+        )
 
         if (comment.body.toLowerCase().includes(keyword.toLowerCase())) {
           yield* tracker.moveToTodo(issueId).pipe(

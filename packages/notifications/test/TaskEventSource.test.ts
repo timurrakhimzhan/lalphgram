@@ -4,7 +4,9 @@ import type { AppEvent } from "../src/Events.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { TrackerIssue, TrackerIssueEvent } from "../src/schemas/TrackerSchemas.js"
 import { TaskEventSource, TaskEventSourceLive } from "../src/services/TaskEventSource.js"
-import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
+import { TaskTrackerError } from "../src/services/TaskTracker.js"
+import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import { TrackerResolver } from "../src/services/TrackerResolver.js"
 
 const runtimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 0.001,
@@ -28,19 +30,25 @@ const makeIssue = (overrides: Partial<{
     updatedAt: "2024-01-15T10:00:00Z"
   })
 
-const makeTaskTrackerMock = (overrides: Partial<{
+const makeTrackerMock = (overrides: Partial<{
   getRecentEvents: (since: string) => Effect.Effect<ReadonlyArray<TrackerIssueEvent>, TaskTrackerError>
-}> = {}) =>
-  TaskTracker.of({
-    getRecentEvents: overrides.getRecentEvents ?? vi.fn(() => Effect.succeed([])),
-    moveToTodo: vi.fn(() => Effect.succeed(undefined)),
-    setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
-    getIssue: vi.fn(() => Effect.succeed(makeIssue()))
+}> = {}): TaskTrackerService => ({
+  getRecentEvents: overrides.getRecentEvents ?? vi.fn(() => Effect.succeed([])),
+  moveToTodo: vi.fn(() => Effect.succeed(undefined)),
+  setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
+  getIssue: vi.fn(() => Effect.succeed(makeIssue()))
+})
+
+const makeTrackerResolverMock = (trackerMock: TaskTrackerService) =>
+  TrackerResolver.of({
+    trackerForRepo: vi.fn(() => Effect.succeed(trackerMock)),
+    allTrackers: [trackerMock],
+    allWatchedRepos: ["owner/my-repo"]
   })
 
-const makeTestLayer = (mock: ReturnType<typeof makeTaskTrackerMock>) =>
+const makeTestLayer = (resolverMock: ReturnType<typeof makeTrackerResolverMock>) =>
   TaskEventSourceLive.pipe(
-    Layer.provide(Layer.succeed(TaskTracker, mock)),
+    Layer.provide(Layer.succeed(TrackerResolver, resolverMock)),
     Layer.provide(runtimeConfigLayer)
   )
 
@@ -71,13 +79,14 @@ describe("TaskEventSource", () => {
   it("maps TrackerIssueEvent with action created to TaskCreated", () => {
     // Arrange
     const issue = makeIssue({ id: "ISSUE-1", title: "New task" })
-    const mock = makeTaskTrackerMock({
+    const trackerMock = makeTrackerMock({
       getRecentEvents: vi.fn(() => Effect.succeed([new TrackerIssueEvent({ action: "created", issue })]))
     })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
 
     // Act
     return takeEvents(1).pipe(
-      Effect.provide(makeTestLayer(mock)),
+      Effect.provide(makeTestLayer(resolverMock)),
       Effect.map((events) => {
         // Assert
         expect(events).toHaveLength(1)
@@ -93,7 +102,7 @@ describe("TaskEventSource", () => {
   it("emits TaskUpdated with previousState when state changes", () => {
     // Arrange
     let callCount = 0
-    const mock = makeTaskTrackerMock({
+    const trackerMock = makeTrackerMock({
       getRecentEvents: vi.fn(() => {
         callCount++
         if (callCount === 1) {
@@ -106,10 +115,11 @@ describe("TaskEventSource", () => {
         ])
       })
     })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
 
     // Act
     return takeEvents(2).pipe(
-      Effect.provide(makeTestLayer(mock)),
+      Effect.provide(makeTestLayer(resolverMock)),
       Effect.map((events) => {
         // Assert
         const updated = events.filter((e) => e._tag === "TaskUpdated")
@@ -125,7 +135,7 @@ describe("TaskEventSource", () => {
   it("filters out updates when state has not changed", () => {
     // Arrange
     let callCount = 0
-    const mock = makeTaskTrackerMock({
+    const trackerMock = makeTrackerMock({
       getRecentEvents: vi.fn(() => {
         callCount++
         if (callCount === 1) {
@@ -138,10 +148,11 @@ describe("TaskEventSource", () => {
         ])
       })
     })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
 
     // Act — collect for enough time to get 2+ poll cycles
     return collectEventsFor(50).pipe(
-      Effect.provide(makeTestLayer(mock)),
+      Effect.provide(makeTestLayer(resolverMock)),
       Effect.map((events) => {
         // Assert — only the first update should be emitted (unknown → Todo), second is filtered
         const updated = events.filter((e) => e._tag === "TaskUpdated")
@@ -153,17 +164,18 @@ describe("TaskEventSource", () => {
 
   it("handles poll cycle errors by logging and emitting empty batch", () => {
     // Arrange
-    const mock = makeTaskTrackerMock({
+    const trackerMock = makeTrackerMock({
       getRecentEvents: vi.fn(() => Effect.fail(new TaskTrackerError({ message: "API error", cause: null })))
     })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
 
     // Act
     return collectEventsFor(50).pipe(
-      Effect.provide(makeTestLayer(mock)),
+      Effect.provide(makeTestLayer(resolverMock)),
       Effect.map((events) => {
         // Assert
         expect(events).toHaveLength(0)
-        expect(mock.getRecentEvents).toHaveBeenCalled()
+        expect(trackerMock.getRecentEvents).toHaveBeenCalled()
       }),
       Effect.runPromise
     )

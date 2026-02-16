@@ -1,10 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Option, Stream } from "effect"
 import { beforeEach, vi } from "vitest"
-import { AppCredentials, Credentials } from "../src/schemas/CredentialSchemas.js"
 import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
-
 import { TelegramAdapterLive } from "../src/services/TelegramAdapter.js"
+import { TelegramConfig, TelegramConfigSchema } from "../src/services/TelegramConfig.js"
 
 const sendMessageMock = vi.fn().mockResolvedValue({ message_id: 1 })
 const launchMock = vi.fn().mockResolvedValue(undefined)
@@ -20,14 +19,23 @@ vi.mock("telegraf", () => ({
   }))
 }))
 
-const credentials = new Credentials({
-  backend: "github",
-  githubToken: "test-gh-token",
-  telegramBotToken: "test-bot-token",
-  telegramChatId: "12345"
-})
+const makeStoreWithConfig = (config: TelegramConfigSchema | null) => {
+  let currentConfig = config
+  return TelegramConfig.of({
+    get: Effect.sync(() => currentConfig !== null ? Option.some(currentConfig) : Option.none()),
+    set: vi.fn((c: TelegramConfigSchema) =>
+      Effect.sync(() => {
+        currentConfig = c
+      })
+    )
+  })
+}
 
-const credentialsLayer = Layer.succeed(AppCredentials, credentials)
+const configWithChatId = new TelegramConfigSchema({ botToken: "test-bot-token", chatId: "12345" })
+const configNoChatId = new TelegramConfigSchema({ botToken: "test-bot-token", chatId: null })
+
+const storeWithChatIdLayer = Layer.succeed(TelegramConfig, makeStoreWithConfig(configWithChatId))
+const storeNoChatIdLayer = Layer.succeed(TelegramConfig, makeStoreWithConfig(configNoChatId))
 
 describe("MessengerAdapter", () => {
   it.effect("sendMessage delegates to the adapter implementation", () => {
@@ -112,7 +120,7 @@ describe("TelegramAdapterLive", () => {
   it.effect("sendMessage calls bot.telegram.sendMessage with correct parameters", () => {
     // Arrange
     const layer = TelegramAdapterLive.pipe(
-      Layer.provide(credentialsLayer)
+      Layer.provide(storeWithChatIdLayer)
     )
 
     return Effect.gen(function*() {
@@ -124,6 +132,52 @@ describe("TelegramAdapterLive", () => {
 
       // Assert
       expect(sendMessageMock).toHaveBeenCalledWith("12345", "Hello from test", { parse_mode: "HTML" })
+    }).pipe(
+      Effect.provide(layer),
+      Effect.scoped
+    )
+  })
+
+  it.effect("sendMessage fails when chatId not configured", () => {
+    // Arrange
+    const layer = TelegramAdapterLive.pipe(
+      Layer.provide(storeNoChatIdLayer)
+    )
+
+    return Effect.gen(function*() {
+      // Arrange
+      const adapter = yield* MessengerAdapter
+
+      // Act
+      const error = yield* adapter.sendMessage("test").pipe(Effect.flip)
+
+      // Assert
+      expect(error).toBeInstanceOf(MessengerAdapterError)
+      expect(error.message).toContain("not configured")
+    }).pipe(
+      Effect.provide(layer),
+      Effect.scoped
+    )
+  })
+
+  it.effect("sendMessage picks up chatId after store update", () => {
+    // Arrange
+    const store = makeStoreWithConfig(configNoChatId)
+    const storeLayer = Layer.succeed(TelegramConfig, store)
+    const layer = TelegramAdapterLive.pipe(
+      Layer.provide(storeLayer)
+    )
+
+    return Effect.gen(function*() {
+      // Arrange
+      const adapter = yield* MessengerAdapter
+
+      // Act — update store with chatId, then send
+      yield* store.set(new TelegramConfigSchema({ botToken: "test-bot-token", chatId: "99999" }))
+      yield* adapter.sendMessage("Hello after discovery")
+
+      // Assert
+      expect(sendMessageMock).toHaveBeenCalledWith("99999", "Hello after discovery", { parse_mode: "HTML" })
     }).pipe(
       Effect.provide(layer),
       Effect.scoped
@@ -143,7 +197,7 @@ describe("TelegramAdapterLive", () => {
     })
 
     const layer = TelegramAdapterLive.pipe(
-      Layer.provide(credentialsLayer)
+      Layer.provide(storeWithChatIdLayer)
     )
 
     return Effect.gen(function*() {

@@ -2,10 +2,10 @@
  * Telegram messenger adapter using the Telegraf library
  * @since 1.0.0
  */
-import { Effect, Layer, Queue, Stream } from "effect"
+import { Effect, Layer, Option, Queue, Stream } from "effect"
 import { Telegraf } from "telegraf"
-import { AppCredentials } from "../schemas/CredentialSchemas.js"
 import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "./MessengerAdapter.js"
+import { TelegramConfig } from "./TelegramConfig.js"
 
 /**
  * @since 1.0.0
@@ -14,8 +14,17 @@ import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "./Mess
 export const TelegramAdapterLive = Layer.scoped(
   MessengerAdapter,
   Effect.gen(function*() {
-    const creds = yield* AppCredentials
-    const bot = new Telegraf(creds.telegramBotToken)
+    const store = yield* TelegramConfig
+    const config = yield* store.get
+
+    if (Option.isNone(config) || config.value.botToken === "") {
+      return yield* new MessengerAdapterError({
+        message: "Telegram bot token not configured. Run setup first.",
+        cause: null
+      })
+    }
+
+    const bot = new Telegraf(config.value.botToken)
     const messageQueue = yield* Queue.unbounded<IncomingMessage>()
 
     bot.on("message", (ctx) => {
@@ -46,14 +55,24 @@ export const TelegramAdapterLive = Layer.scoped(
     )
 
     const sendMessage = (text: string) =>
-      Effect.tryPromise({
-        try: () => bot.telegram.sendMessage(creds.telegramChatId, text, { parse_mode: "HTML" }),
-        catch: (err) =>
-          new MessengerAdapterError({
-            message: `Failed to send Telegram message: ${String(err)}`,
-            cause: err
+      Effect.gen(function*() {
+        const currentConfig = yield* store.get
+        const resolvedChatId = Option.isSome(currentConfig) ? currentConfig.value.chatId : null
+        if (resolvedChatId === null) {
+          return yield* new MessengerAdapterError({
+            message: "Telegram chat ID not configured. Run setup first.",
+            cause: null
           })
-      }).pipe(Effect.asVoid)
+        }
+        yield* Effect.tryPromise({
+          try: () => bot.telegram.sendMessage(resolvedChatId, text, { parse_mode: "HTML" }),
+          catch: (err) =>
+            new MessengerAdapterError({
+              message: `Failed to send Telegram message: ${String(err)}`,
+              cause: err
+            })
+        })
+      })
 
     const incomingMessages = Stream.fromQueue(messageQueue)
 

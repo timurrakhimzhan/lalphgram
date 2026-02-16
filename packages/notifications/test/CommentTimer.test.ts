@@ -5,7 +5,9 @@ import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.j
 import { CommentTimer, CommentTimerLive } from "../src/services/CommentTimer.js"
 import type { MessengerAdapterError } from "../src/services/MessengerAdapter.js"
 import { MessengerAdapter } from "../src/services/MessengerAdapter.js"
-import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
+import { TaskTrackerError } from "../src/services/TaskTracker.js"
+import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import { TrackerResolver } from "../src/services/TrackerResolver.js"
 
 const runtimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,
@@ -43,23 +45,29 @@ const makeComment = (overrides: Partial<{
     repo: "owner/my-repo"
   })
 
-const makeTaskTrackerMock = (overrides: Partial<{
+const makeTrackerMock = (overrides: Partial<{
   moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
-}> = {}) =>
-  TaskTracker.of({
-    getRecentEvents: vi.fn(() => Effect.succeed([])),
-    moveToTodo: overrides.moveToTodo ?? vi.fn(() => Effect.succeed(undefined)),
-    setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
-    getIssue: vi.fn(() =>
-      Effect.succeed({
-        id: "ABC-123",
-        title: "Test Issue",
-        state: "In Progress",
-        url: "https://example.com",
-        createdAt: "2024-01-15T10:00:00Z",
-        updatedAt: "2024-01-15T10:00:00Z"
-      })
-    )
+}> = {}): TaskTrackerService => ({
+  getRecentEvents: vi.fn(() => Effect.succeed([])),
+  moveToTodo: overrides.moveToTodo ?? vi.fn(() => Effect.succeed(undefined)),
+  setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
+  getIssue: vi.fn(() =>
+    Effect.succeed({
+      id: "ABC-123",
+      title: "Test Issue",
+      state: "In Progress",
+      url: "https://example.com",
+      createdAt: "2024-01-15T10:00:00Z",
+      updatedAt: "2024-01-15T10:00:00Z"
+    })
+  )
+})
+
+const makeTrackerResolverMock = (trackerMock: TaskTrackerService) =>
+  TrackerResolver.of({
+    trackerForRepo: vi.fn(() => Effect.succeed(trackerMock)),
+    allTrackers: [trackerMock],
+    allWatchedRepos: ["owner/my-repo"]
   })
 
 const makeMessengerMock = (overrides: Partial<{
@@ -71,11 +79,11 @@ const makeMessengerMock = (overrides: Partial<{
   })
 
 const makeTestLayer = (
-  trackerMock: ReturnType<typeof makeTaskTrackerMock>,
+  resolverMock: ReturnType<typeof makeTrackerResolverMock>,
   messengerMock: ReturnType<typeof makeMessengerMock>
 ) =>
   CommentTimerLive.pipe(
-    Layer.provide(Layer.succeed(TaskTracker, trackerMock)),
+    Layer.provide(Layer.succeed(TrackerResolver, resolverMock)),
     Layer.provide(Layer.succeed(MessengerAdapter, messengerMock)),
     Layer.provide(runtimeConfigLayer)
   )
@@ -83,7 +91,8 @@ const makeTestLayer = (
 describe("CommentTimer", () => {
   it.live("immediately calls moveToTodo and sendMessage when comment contains trigger keyword", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "ABC-123/feature" })
     const comment = makeComment({ body: "This is URGENT please fix" })
@@ -97,13 +106,14 @@ describe("CommentTimer", () => {
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
       expect(messengerMock.sendMessage).toHaveBeenCalled()
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("logs warning and returns when no issue ID found in branch name", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "main" })
     const comment = makeComment({ body: "Some comment" })
@@ -117,13 +127,14 @@ describe("CommentTimer", () => {
       expect(trackerMock.moveToTodo).not.toHaveBeenCalled()
       expect(messengerMock.sendMessage).not.toHaveBeenCalled()
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("forks a debounce timer when comment does not contain trigger keyword", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "ABC-123/feature" })
     const comment = makeComment({ body: "Please review" })
@@ -144,14 +155,15 @@ describe("CommentTimer", () => {
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
       expect(messengerMock.sendMessage).toHaveBeenCalled()
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("cancels existing timer when new comment arrives for same PR", () => {
     // Arrange
     const moveToTodoFn = vi.fn(() => Effect.succeed(undefined))
-    const trackerMock = makeTaskTrackerMock({ moveToTodo: moveToTodoFn })
+    const trackerMock = makeTrackerMock({ moveToTodo: moveToTodoFn })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "ABC-123/feature" })
     const comment1 = makeComment({ body: "First comment" })
@@ -168,13 +180,14 @@ describe("CommentTimer", () => {
       // Assert — moveToTodo called only once (first timer was cancelled)
       expect(moveToTodoFn).toHaveBeenCalledTimes(1)
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("handles trigger keyword case-insensitively", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "ABC-123/feature" })
     const comment = makeComment({ body: "This is UrGeNt!" })
@@ -188,13 +201,14 @@ describe("CommentTimer", () => {
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
       expect(messengerMock.sendMessage).toHaveBeenCalled()
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("shutdown interrupts all active timer fibers", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock()
+    const trackerMock = makeTrackerMock()
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr1 = makePR({ headRef: "ABC-123/feature", number: 1 })
     const pr2 = makePR({ headRef: "DEF-456/fix", number: 2 })
@@ -214,14 +228,15 @@ describe("CommentTimer", () => {
       expect(trackerMock.moveToTodo).not.toHaveBeenCalled()
       expect(messengerMock.sendMessage).not.toHaveBeenCalled()
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("handles different PRs independently with separate timers", () => {
     // Arrange
     const moveToTodoFn = vi.fn(() => Effect.succeed(undefined))
-    const trackerMock = makeTaskTrackerMock({ moveToTodo: moveToTodoFn })
+    const trackerMock = makeTrackerMock({ moveToTodo: moveToTodoFn })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr1 = makePR({ headRef: "ABC-123/feature", number: 1 })
     const pr2 = makePR({ headRef: "DEF-456/fix", number: 2 })
@@ -241,15 +256,16 @@ describe("CommentTimer", () => {
       expect(moveToTodoFn).toHaveBeenCalledWith("ABC-123")
       expect(moveToTodoFn).toHaveBeenCalledWith("DEF-456")
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 
   it.live("timer fiber catches errors and logs them without propagating", () => {
     // Arrange
-    const trackerMock = makeTaskTrackerMock({
+    const trackerMock = makeTrackerMock({
       moveToTodo: vi.fn(() => Effect.fail(new TaskTrackerError({ message: "API error", cause: null })))
     })
+    const resolverMock = makeTrackerResolverMock(trackerMock)
     const messengerMock = makeMessengerMock()
     const pr = makePR({ headRef: "ABC-123/feature" })
     const comment = makeComment({ body: "Please review" })
@@ -265,7 +281,7 @@ describe("CommentTimer", () => {
       // Assert — no error propagated, moveToTodo was attempted
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
     }).pipe(
-      Effect.provide(makeTestLayer(trackerMock, messengerMock))
+      Effect.provide(makeTestLayer(resolverMock, messengerMock))
     )
   })
 })

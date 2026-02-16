@@ -5,9 +5,10 @@
 import { Array, Context, Data, Duration, Effect, HashMap, HashSet, Layer, Option, Ref, Schedule, Stream } from "effect"
 import { PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
 import type { AppEvent } from "../Events.js"
-import { AppCredentials, AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
+import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { GitHubClient } from "./GitHubClient.js"
+import { TrackerResolver } from "./TrackerResolver.js"
 
 /**
  * @since 1.0.0
@@ -48,7 +49,7 @@ export const GitHubEventSourceLive = Layer.effect(
   GitHubEventSource,
   Effect.gen(function*() {
     const config = yield* AppRuntimeConfig
-    const creds = yield* AppCredentials
+    const resolver = yield* TrackerResolver
     const github = yield* GitHubClient
     const interval = Duration.seconds(config.pollIntervalSeconds)
 
@@ -75,9 +76,10 @@ export const GitHubEventSourceLive = Layer.effect(
         )
       )
 
-      const repos = creds.watchedRepos.length === 0
+      const watched = resolver.allWatchedRepos
+      const repos = watched.length === 0
         ? allRepos
-        : allRepos.filter((repo) => creds.watchedRepos.includes(repo.full_name))
+        : allRepos.filter((repo) => watched.includes(repo.full_name))
 
       const allPRsWithRepos = yield* Effect.forEach(repos, (repo) =>
         github.listOpenPRs(repo).pipe(

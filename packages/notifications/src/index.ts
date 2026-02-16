@@ -61,7 +61,7 @@ export * from "./services/GitHubClient.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/CredentialStore.js"
+export * from "./services/EventLoop.js"
 
 /**
  * @since 1.0.0
@@ -87,3 +87,23 @@ export * from "./services/MessengerAdapter.js"
  * @since 1.0.0
  */
 export * from "./services/TelegramAdapter.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/TrackerResolver.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/TelegramConfig.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/AppContext.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/LalphConfig.js"

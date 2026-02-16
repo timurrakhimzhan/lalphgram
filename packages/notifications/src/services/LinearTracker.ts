@@ -30,11 +30,49 @@ export const LinearTrackerLive = Layer.effect(
       return todoState.id
     })
 
-    const getRecentEvents = (since: string) =>
-      linearClient.listIssues({ since }).pipe(
-        Effect.map((issues) =>
-          issues.map((node): TrackerIssueEvent => {
-            const issue = new TrackerIssue({
+    return TaskTracker.of({
+      getRecentEvents: (since) =>
+        linearClient.listIssues({ since }).pipe(
+          Effect.map((issues) =>
+            issues.map((node): TrackerIssueEvent => {
+              const issue = new TrackerIssue({
+                id: node.identifier,
+                title: node.title,
+                state: node.stateName,
+                url: node.url,
+                createdAt: node.createdAt,
+                updatedAt: node.updatedAt
+              })
+              const action = node.createdAt === node.updatedAt ? "created" : "updated"
+              return new TrackerIssueEvent({ action, issue })
+            })
+          ),
+          Effect.mapError((err) =>
+            new TaskTrackerError({ message: `Failed to get recent events: ${err.message}`, cause: err })
+          )
+        ),
+
+      moveToTodo: (issueId) =>
+        Effect.gen(function*() {
+          const stateId = yield* resolveTodoStateId
+          yield* linearClient.updateIssue({ id: issueId, stateId }).pipe(
+            Effect.mapError((err) =>
+              new TaskTrackerError({ message: `Failed to update issue state: ${err.message}`, cause: err })
+            )
+          )
+        }),
+
+      setPriorityUrgent: (issueId) =>
+        linearClient.updateIssuePriority({ id: issueId, priority: 1 }).pipe(
+          Effect.mapError((err) =>
+            new TaskTrackerError({ message: `Failed to set priority urgent: ${err.message}`, cause: err })
+          )
+        ),
+
+      getIssue: (issueId) =>
+        linearClient.getIssue({ id: issueId }).pipe(
+          Effect.map((node) =>
+            new TrackerIssue({
               id: node.identifier,
               title: node.title,
               state: node.stateName,
@@ -42,52 +80,9 @@ export const LinearTrackerLive = Layer.effect(
               createdAt: node.createdAt,
               updatedAt: node.updatedAt
             })
-            const action = node.createdAt === node.updatedAt ? "created" : "updated"
-            return new TrackerIssueEvent({ action, issue })
-          })
-        ),
-        Effect.mapError((err) =>
-          new TaskTrackerError({ message: `Failed to get recent events: ${err.message}`, cause: err })
+          ),
+          Effect.mapError((err) => new TaskTrackerError({ message: `Failed to get issue: ${err.message}`, cause: err }))
         )
-      )
-
-    const moveToTodo = (issueId: string) =>
-      Effect.gen(function*() {
-        const stateId = yield* resolveTodoStateId
-        yield* linearClient.updateIssue({ id: issueId, stateId }).pipe(
-          Effect.mapError((err) =>
-            new TaskTrackerError({ message: `Failed to update issue state: ${err.message}`, cause: err })
-          )
-        )
-      })
-
-    const setPriorityUrgent = (issueId: string) =>
-      linearClient.updateIssuePriority({ id: issueId, priority: 1 }).pipe(
-        Effect.mapError((err) =>
-          new TaskTrackerError({ message: `Failed to set priority urgent: ${err.message}`, cause: err })
-        )
-      )
-
-    const getIssue = (issueId: string) =>
-      linearClient.getIssue({ id: issueId }).pipe(
-        Effect.map((node) =>
-          new TrackerIssue({
-            id: node.identifier,
-            title: node.title,
-            state: node.stateName,
-            url: node.url,
-            createdAt: node.createdAt,
-            updatedAt: node.updatedAt
-          })
-        ),
-        Effect.mapError((err) => new TaskTrackerError({ message: `Failed to get issue: ${err.message}`, cause: err }))
-      )
-
-    return TaskTracker.of({
-      getRecentEvents,
-      moveToTodo,
-      setPriorityUrgent,
-      getIssue
     })
   })
 )
