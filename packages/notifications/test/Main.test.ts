@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
-import { PRCommentAdded, PRConflictDetected, PROpened, TaskCreated, TaskUpdated } from "../src/Events.js"
+import {
+  PRAutoMerged,
+  PRCIFailed,
+  PRCommentAdded,
+  PRConflictDetected,
+  PROpened,
+  TaskCreated,
+  TaskUpdated
+} from "../src/Events.js"
 import type { AppEvent } from "../src/Events.js"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
@@ -232,6 +240,93 @@ describe("event loop dispatch", () => {
       yield* runEventLoop
 
       expect(commentTimerMock.handleComment).toHaveBeenCalledWith(pr, comment)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("sends Telegram notification for PRAutoMerged events", () => {
+    // Arrange
+    const pr = makePR()
+    const event = new PRAutoMerged({ pr })
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([event], { messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>PR auto-merged</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("Test PR")
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("moves to todo, sets priority urgent, and sends Telegram for PRCIFailed events", () => {
+    // Arrange
+    const pr = makePR()
+    const event = new PRCIFailed({
+      pr,
+      failedChecks: [
+        { name: "lint", html_url: "https://github.com/checks/1", conclusion: "failure" },
+        { name: "test", html_url: "https://github.com/checks/2", conclusion: "failure" }
+      ]
+    })
+    const trackerMock = makeTrackerMock()
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([event], { trackerMock, messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+
+      // Assert
+      expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
+      expect(trackerMock.setPriorityUrgent).toHaveBeenCalledWith("ABC-123")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>CI failed</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("lint, test")
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("sends Telegram for PRCIFailed when no issue ID in branch", () => {
+    // Arrange
+    const pr = new GitHubPullRequest({
+      id: 100,
+      number: 1,
+      title: "Test PR",
+      state: "open",
+      html_url: "https://github.com/owner/repo/pull/1",
+      headRef: "no-issue-id",
+      headSha: "abc123",
+      hasConflicts: false,
+      repo: "owner/repo"
+    })
+    const event = new PRCIFailed({
+      pr,
+      failedChecks: [
+        { name: "build", html_url: "https://github.com/checks/1", conclusion: "failure" }
+      ]
+    })
+    const trackerMock = makeTrackerMock()
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([event], { trackerMock, messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+
+      // Assert
+      expect(trackerMock.moveToTodo).not.toHaveBeenCalled()
+      expect(trackerMock.setPriorityUrgent).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>CI failed</b>")
+      )
     }).pipe(Effect.provide(layer))
   })
 
