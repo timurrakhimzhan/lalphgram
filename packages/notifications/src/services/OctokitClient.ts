@@ -45,7 +45,7 @@ export interface OctokitPullRequest {
   readonly title: string
   readonly state: string
   readonly htmlUrl: string
-  readonly head: { readonly ref: string }
+  readonly head: { readonly ref: string; readonly sha: string }
 }
 
 /**
@@ -241,7 +241,7 @@ export const OctokitClientLive = Layer.effect(
               title: p.title,
               state: p.state,
               htmlUrl: p.html_url,
-              head: { ref: p.head.ref }
+              head: { ref: p.head.ref, sha: p.head.sha }
             }))
           )
         )
@@ -269,7 +269,7 @@ export const OctokitClientLive = Layer.effect(
             title: response.data.title,
             state: response.data.state,
             htmlUrl: response.data.html_url,
-            head: { ref: response.data.head.ref },
+            head: { ref: response.data.head.ref, sha: response.data.head.sha },
             mergeable: response.data.mergeable
           }))
         )

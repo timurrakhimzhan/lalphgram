@@ -29,6 +29,7 @@ export class GitHubPullRequest extends Schema.Class<GitHubPullRequest>("GitHubPu
   state: Schema.String,
   html_url: Schema.String,
   headRef: Schema.propertySignature(Schema.String).pipe(Schema.fromKey("head_ref")),
+  headSha: Schema.String,
   hasConflicts: Schema.Boolean,
   repo: Schema.String
 }) {}

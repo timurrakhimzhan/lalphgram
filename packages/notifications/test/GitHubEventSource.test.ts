@@ -28,6 +28,7 @@ const makePR = (overrides: Partial<{
   number: number
   title: string
   headRef: string
+  headSha: string
   hasConflicts: boolean
   repo: string
 }> = {}) =>
@@ -38,6 +39,7 @@ const makePR = (overrides: Partial<{
     state: "open",
     html_url: "https://github.com/owner/my-repo/pull/1",
     headRef: overrides.headRef ?? "feature/test",
+    headSha: overrides.headSha ?? "abc123",
     hasConflicts: overrides.hasConflicts ?? false,
     repo: overrides.repo ?? "owner/my-repo"
   })

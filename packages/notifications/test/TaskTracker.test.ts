@@ -197,7 +197,7 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
         title: "",
         state: "open",
         htmlUrl: "",
-        head: { ref: "" },
+        head: { ref: "", sha: "abc123" },
         mergeable: null
       })
     ),

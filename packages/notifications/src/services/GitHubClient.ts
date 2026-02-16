@@ -99,6 +99,7 @@ export const GitHubClientLive = Layer.effect(
               state: raw.state,
               html_url: raw.htmlUrl,
               headRef: raw.head.ref,
+              headSha: raw.head.sha,
               hasConflicts: false,
               repo: repo.full_name
             }))
@@ -123,6 +124,7 @@ export const GitHubClientLive = Layer.effect(
             state: raw.state,
             html_url: raw.htmlUrl,
             headRef: raw.head.ref,
+            headSha: raw.head.sha,
             hasConflicts: raw.mergeable === false,
             repo: repo.full_name
           })
