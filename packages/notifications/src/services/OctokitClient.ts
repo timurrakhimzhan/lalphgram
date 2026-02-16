@@ -392,7 +392,7 @@ export const OctokitClientLive = Layer.effect(
           catch: (err) => new OctokitClientError({ message: `Failed to list user issues: ${String(err)}`, cause: err })
         }).pipe(
           Effect.map((response) =>
-            response.data.map((i): OctokitIssue => ({
+            response.data.filter((i) => !i.pull_request).map((i): OctokitIssue => ({
               number: i.number,
               title: i.title,
               state: i.state,
