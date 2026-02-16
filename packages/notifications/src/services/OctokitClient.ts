@@ -97,6 +97,40 @@ export interface OctokitIssueDetail {
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface OctokitCheckRun {
+  readonly id: number
+  readonly name: string
+  readonly status: string
+  readonly conclusion: string | null
+  readonly htmlUrl: string
+}
+
+/**
+ * @since 1.0.0
+ * @category models
+ */
+export interface OctokitCombinedStatus {
+  readonly state: string
+  readonly statuses: ReadonlyArray<{
+    readonly state: string
+    readonly context: string
+  }>
+}
+
+/**
+ * @since 1.0.0
+ * @category models
+ */
+export interface OctokitMergeResult {
+  readonly sha: string
+  readonly merged: boolean
+  readonly message: string
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface OctokitClientService {
@@ -150,6 +184,21 @@ export interface OctokitClientService {
     readonly pullNumber: number
     readonly perPage: number
   }) => Effect.Effect<ReadonlyArray<OctokitComment>, OctokitClientError>
+  readonly getCombinedStatusForRef: (params: {
+    readonly owner: string
+    readonly repo: string
+    readonly ref: string
+  }) => Effect.Effect<OctokitCombinedStatus, OctokitClientError>
+  readonly listCheckRunsForRef: (params: {
+    readonly owner: string
+    readonly repo: string
+    readonly ref: string
+  }) => Effect.Effect<ReadonlyArray<OctokitCheckRun>, OctokitClientError>
+  readonly mergePull: (params: {
+    readonly owner: string
+    readonly repo: string
+    readonly pullNumber: number
+  }) => Effect.Effect<OctokitMergeResult, OctokitClientError>
 }
 
 /**
@@ -434,6 +483,87 @@ export const OctokitClientLive = Layer.effect(
         )
       })
 
+    const getCombinedStatusForRef = (params: {
+      readonly owner: string
+      readonly repo: string
+      readonly ref: string
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.repos.getCombinedStatusForRef({
+              owner: params.owner,
+              repo: params.repo,
+              ref: params.ref
+            }),
+          catch: (err) =>
+            new OctokitClientError({ message: `Failed to get combined status for ref: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.map((response): OctokitCombinedStatus => ({
+            state: response.data.state,
+            statuses: response.data.statuses.map((s) => ({
+              state: s.state,
+              context: s.context
+            }))
+          }))
+        )
+      })
+
+    const listCheckRunsForRef = (params: {
+      readonly owner: string
+      readonly repo: string
+      readonly ref: string
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.checks.listForRef({
+              owner: params.owner,
+              repo: params.repo,
+              ref: params.ref
+            }),
+          catch: (err) =>
+            new OctokitClientError({ message: `Failed to list check runs for ref: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.map((response) =>
+            response.data.check_runs.map((cr): OctokitCheckRun => ({
+              id: cr.id,
+              name: cr.name,
+              status: cr.status,
+              conclusion: cr.conclusion ?? null,
+              htmlUrl: cr.html_url ?? ""
+            }))
+          )
+        )
+      })
+
+    const mergePull = (params: {
+      readonly owner: string
+      readonly repo: string
+      readonly pullNumber: number
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.pulls.merge({
+              owner: params.owner,
+              repo: params.repo,
+              pull_number: params.pullNumber
+            }),
+          catch: (err) =>
+            new OctokitClientError({ message: `Failed to merge pull request: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.map((response): OctokitMergeResult => ({
+            sha: response.data.sha,
+            merged: response.data.merged,
+            message: response.data.message
+          }))
+        )
+      })
+
     return OctokitClient.of({
       getAuthenticatedUser,
       listUserRepos,
@@ -444,7 +574,10 @@ export const OctokitClientLive = Layer.effect(
       listUserIssues,
       getIssue,
       addIssueLabels,
-      listPullReviewComments
+      listPullReviewComments,
+      getCombinedStatusForRef,
+      listCheckRunsForRef,
+      mergePull
     })
   })
 )
