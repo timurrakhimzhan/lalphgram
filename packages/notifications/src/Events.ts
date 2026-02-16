@@ -52,4 +52,32 @@ export class PRCommentAdded extends Data.TaggedClass("PRCommentAdded")<{
  * @since 1.0.0
  * @category events
  */
-export type AppEvent = TaskCreated | TaskUpdated | PROpened | PRConflictDetected | PRCommentAdded
+export class PRAutoMerged extends Data.TaggedClass("PRAutoMerged")<{
+  readonly pr: GitHubPullRequest
+}> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export class PRCIFailed extends Data.TaggedClass("PRCIFailed")<{
+  readonly pr: GitHubPullRequest
+  readonly failedChecks: ReadonlyArray<{
+    readonly name: string
+    readonly html_url: string
+    readonly conclusion: string
+  }>
+}> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type AppEvent =
+  | TaskCreated
+  | TaskUpdated
+  | PROpened
+  | PRConflictDetected
+  | PRCommentAdded
+  | PRAutoMerged
+  | PRCIFailed

@@ -29,7 +29,9 @@ export class LalphLinearToken extends Schema.Class<LalphLinearToken>("LalphLinea
 export class RuntimeConfig extends Schema.Class<RuntimeConfig>("RuntimeConfig")({
   pollIntervalSeconds: Schema.Number,
   triggerKeyword: Schema.String,
-  timerDelaySeconds: Schema.Number
+  timerDelaySeconds: Schema.Number,
+  autoMergeEnabled: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+  autoMergeWaitMinutes: Schema.optionalWith(Schema.Number, { default: () => 10 })
 }) {}
 
 /**
