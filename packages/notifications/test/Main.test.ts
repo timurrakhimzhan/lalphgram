@@ -383,7 +383,7 @@ describe("multi-step plan input", () => {
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "Notification service started.",
+          text: "🚀 Notification service started.",
           replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
         })
       )
