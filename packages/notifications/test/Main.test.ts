@@ -41,6 +41,7 @@ const makePR = () =>
     state: "open",
     html_url: "https://github.com/owner/repo/pull/1",
     headRef: "ABC-123/feature",
+    headSha: "abc123",
     hasConflicts: false,
     repo: "owner/repo"
   })
@@ -190,6 +191,7 @@ describe("event loop dispatch", () => {
       state: "open",
       html_url: "https://github.com/owner/repo/pull/1",
       headRef: "ABC-123/feature",
+      headSha: "abc123",
       hasConflicts: true,
       repo: "owner/repo"
     })

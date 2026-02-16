@@ -20,6 +20,7 @@ const runtimeConfigLayer = Layer.succeed(AppRuntimeConfig, runtimeConfig)
 const makePR = (overrides: Partial<{
   number: number
   headRef: string
+  headSha: string
   repo: string
 }> = {}) =>
   new GitHubPullRequest({
@@ -29,6 +30,7 @@ const makePR = (overrides: Partial<{
     state: "open",
     html_url: "https://github.com/owner/my-repo/pull/1",
     headRef: overrides.headRef ?? "ABC-123/feature",
+    headSha: overrides.headSha ?? "abc123",
     hasConflicts: false,
     repo: overrides.repo ?? "owner/my-repo"
   })

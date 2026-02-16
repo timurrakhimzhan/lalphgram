@@ -31,7 +31,7 @@ const makeOctokitMock = (): OctokitClientService => ({
       title: "Add feature",
       state: "open",
       htmlUrl: "https://github.com/owner/my-repo/pull/42",
-      head: { ref: "feature/add-thing" }
+      head: { ref: "feature/add-thing", sha: "abc123" }
     }])
   ),
   getPull: vi.fn(() =>
@@ -41,7 +41,7 @@ const makeOctokitMock = (): OctokitClientService => ({
       title: "Some PR",
       state: "open",
       htmlUrl: "https://github.com/owner/my-repo/pull/42",
-      head: { ref: "feature/branch" },
+      head: { ref: "feature/branch", sha: "abc123" },
       mergeable: null
     })
   ),
@@ -172,7 +172,7 @@ describe("GitHubClient", () => {
           title: "Conflicted PR",
           state: "open",
           htmlUrl: "https://github.com/owner/my-repo/pull/43",
-          head: { ref: "feature/conflicted" },
+          head: { ref: "feature/conflicted", sha: "def456" },
           mergeable: false
         })
       )

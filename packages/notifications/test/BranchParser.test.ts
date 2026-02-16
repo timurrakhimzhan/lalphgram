@@ -11,6 +11,7 @@ const makePR = (headRef: string, repo = "owner/my-repo") =>
     state: "open",
     html_url: "https://github.com/owner/my-repo/pull/1",
     headRef,
+    headSha: "abc123",
     hasConflicts: false,
     repo
   })
