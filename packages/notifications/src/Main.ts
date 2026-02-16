@@ -64,7 +64,7 @@ const lalphNotifyCommand = CliCommand.make(
         Effect.gen(function*() {
           const appContext = yield* AppContext
           return (tempFile: string) =>
-            PlatformCommand.make("lalph", "plan", "--file", tempFile, "--output-format", "stream-json").pipe(
+            PlatformCommand.make("lalph", "plan", "--file", tempFile, "--dangerous").pipe(
               PlatformCommand.workingDirectory(appContext.projectRoot),
               PlatformCommand.stdout("pipe"),
               PlatformCommand.stderr("pipe"),
