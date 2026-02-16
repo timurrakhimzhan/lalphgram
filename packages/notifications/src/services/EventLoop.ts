@@ -276,10 +276,10 @@ export const runEventLoop = Effect.gen(function*() {
   )
 
   yield* notifier.sendMessage({
-    text: "Notification service started.",
+    text: "🚀 Notification service started.",
     replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
   })
-  yield* Console.log("Notification service started. Press Ctrl+C to stop.")
+  yield* Console.log("🚀 Notification service started. Press Ctrl+C to stop.")
 
   yield* Stream.merge(
     incomingMessageStream,
