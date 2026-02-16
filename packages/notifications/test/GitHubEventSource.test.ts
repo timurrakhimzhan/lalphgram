@@ -92,7 +92,9 @@ const makeGitHubClientMock = (overrides: Partial<{
     getPR: vi.fn(() => Effect.succeed(makePR())),
     postComment: vi.fn(() => Effect.succeed(undefined)),
     listComments: overrides.listComments ?? vi.fn(() => Effect.succeed([])),
-    listReviewComments: overrides.listReviewComments ?? vi.fn(() => Effect.succeed([]))
+    listReviewComments: overrides.listReviewComments ?? vi.fn(() => Effect.succeed([])),
+    getCIStatus: vi.fn(() => Effect.succeed({ state: "success", checkRuns: [] })),
+    mergePR: vi.fn(() => Effect.succeed(undefined))
   })
 
 const makeTestLayer = (

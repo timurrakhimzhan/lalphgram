@@ -84,7 +84,9 @@ const makeGitHubClientMock = () =>
     getPR: vi.fn(() => Effect.succeed(makePR())),
     postComment: vi.fn(() => Effect.succeed(undefined)),
     listComments: vi.fn(() => Effect.succeed([])),
-    listReviewComments: vi.fn(() => Effect.succeed([]))
+    listReviewComments: vi.fn(() => Effect.succeed([])),
+    getCIStatus: vi.fn(() => Effect.succeed({ state: "success", checkRuns: [] })),
+    mergePR: vi.fn(() => Effect.succeed(undefined))
   })
 
 const makeTrackerMock = (): TaskTrackerService => ({
