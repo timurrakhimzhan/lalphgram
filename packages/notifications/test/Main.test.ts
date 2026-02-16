@@ -384,7 +384,7 @@ describe("multi-step plan input", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Notification service started.",
-          options: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
         })
       )
     }).pipe(Effect.provide(layer))

@@ -94,6 +94,23 @@ export const TelegramAdapterLive = Layer.scoped(
                 cause: err
               })
           })
+        } else if (message.replyKeyboard != null && message.replyKeyboard.length > 0) {
+          const replyMarkup = Markup.keyboard(
+            message.replyKeyboard.map((o) => [Markup.button.text(o.label)])
+          ).resize()
+
+          yield* Effect.tryPromise({
+            try: () =>
+              bot.telegram.sendMessage(resolvedChatId, message.text, {
+                ...replyMarkup,
+                parse_mode: "HTML"
+              }),
+            catch: (err) =>
+              new MessengerAdapterError({
+                message: `Failed to send Telegram message: ${String(err)}`,
+                cause: err
+              })
+          })
         } else {
           const qId = yield* Ref.updateAndGet(questionCounter, (n) => n + 1)
           const buttons = message.options?.map((o) => [

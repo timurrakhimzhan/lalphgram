@@ -31,6 +31,7 @@ export class IncomingMessage extends Schema.Class<IncomingMessage>("IncomingMess
 export interface OutgoingMessage {
   readonly text: string
   readonly options?: ReadonlyArray<{ readonly label: string }> | undefined
+  readonly replyKeyboard?: ReadonlyArray<{ readonly label: string }> | undefined
 }
 
 /**
