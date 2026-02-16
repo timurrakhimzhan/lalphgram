@@ -44,10 +44,17 @@ const lalphNotifyCommand = Command.make(
         yield* store.set(new TelegramConfigSchema({ botToken, chatId: null }))
       }
 
+      const autoMergeEnabled = yield* Prompt.confirm({ message: "Enable auto-merge?", initial: false })
+      const autoMergeWaitMinutes = autoMergeEnabled
+        ? yield* Prompt.integer({ message: "Maximum minutes to wait after last push before merging", min: 1 })
+        : null
+
       const runtimeConfig = new RuntimeConfig({
         pollIntervalSeconds: interval,
         triggerKeyword: keyword,
-        timerDelaySeconds: timer
+        timerDelaySeconds: timer,
+        autoMergeEnabled,
+        ...(autoMergeWaitMinutes !== null ? { autoMergeWaitMinutes } : {})
       })
 
       const appLayer = Layer.mergeAll(
