@@ -17,6 +17,27 @@ export class GitHubClientError extends Data.TaggedError("GitHubClientError")<{
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface GitHubCheckRun {
+  readonly id: number
+  readonly name: string
+  readonly status: string
+  readonly conclusion: string | null
+  readonly html_url: string
+}
+
+/**
+ * @since 1.0.0
+ * @category models
+ */
+export interface GitHubCIStatus {
+  readonly state: string
+  readonly checkRuns: ReadonlyArray<GitHubCheckRun>
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface GitHubClientService {
@@ -37,6 +58,14 @@ export interface GitHubClientService {
     repo: GitHubRepo,
     prNumber: number
   ) => Effect.Effect<ReadonlyArray<GitHubComment>, GitHubClientError>
+  readonly getCIStatus: (
+    repo: GitHubRepo,
+    ref: string
+  ) => Effect.Effect<GitHubCIStatus, GitHubClientError>
+  readonly mergePR: (
+    repo: GitHubRepo,
+    prNumber: number
+  ) => Effect.Effect<void, GitHubClientError>
 }
 
 /**
@@ -196,6 +225,44 @@ export const GitHubClientLive = Layer.effect(
       )
     }
 
+    const getCIStatus = (repo: GitHubRepo, ref: string) => {
+      const { owner, repo: repoName } = splitFullName(repo.full_name)
+      return Effect.all({
+        combinedStatus: octokit.getCombinedStatusForRef({ owner, repo: repoName, ref }),
+        checkRuns: octokit.listCheckRunsForRef({ owner, repo: repoName, ref })
+      }).pipe(
+        Effect.map(({ checkRuns, combinedStatus }) => ({
+          state: combinedStatus.state,
+          checkRuns: Array.map(checkRuns, (cr) => ({
+            id: cr.id,
+            name: cr.name,
+            status: cr.status,
+            conclusion: cr.conclusion,
+            html_url: cr.htmlUrl
+          }))
+        })),
+        Effect.mapError((err) =>
+          new GitHubClientError({
+            message: `Failed to get CI status for ${repo.full_name} ref ${ref}: ${err.message}`,
+            cause: err
+          })
+        )
+      )
+    }
+
+    const mergePR = (repo: GitHubRepo, prNumber: number) => {
+      const { owner, repo: repoName } = splitFullName(repo.full_name)
+      return octokit.mergePull({ owner, repo: repoName, pullNumber: prNumber }).pipe(
+        Effect.asVoid,
+        Effect.mapError((err) =>
+          new GitHubClientError({
+            message: `Failed to merge PR #${prNumber} for ${repo.full_name}: ${err.message}`,
+            cause: err
+          })
+        )
+      )
+    }
+
     return GitHubClient.of({
       getAuthenticatedUser,
       listUserRepos,
@@ -203,7 +270,9 @@ export const GitHubClientLive = Layer.effect(
       getPR,
       postComment,
       listComments,
-      listReviewComments
+      listReviewComments,
+      getCIStatus,
+      mergePR
     })
   })
 )

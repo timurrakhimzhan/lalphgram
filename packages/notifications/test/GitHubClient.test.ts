@@ -261,6 +261,110 @@ describe("GitHubClient", () => {
     }).pipe(Effect.provide(makeTestLayer(mock)))
   })
 
+  it.effect("getCIStatus combines status and check runs", () => {
+    // Arrange
+    const mock: OctokitClientService = {
+      ...makeOctokitMock(),
+      getCombinedStatusForRef: vi.fn(() =>
+        Effect.succeed({
+          state: "success",
+          statuses: [{ state: "success", context: "ci/build" }]
+        })
+      ),
+      listCheckRunsForRef: vi.fn(() =>
+        Effect.succeed([{
+          id: 1,
+          name: "test-suite",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://github.com/owner/my-repo/runs/1"
+        }])
+      )
+    }
+
+    return Effect.gen(function*() {
+      const client = yield* GitHubClient
+
+      // Act
+      const ciStatus = yield* client.getCIStatus(testRepo, "abc123")
+
+      // Assert
+      expect(ciStatus.state).toBe("success")
+      expect(ciStatus.checkRuns).toHaveLength(1)
+      expect(ciStatus.checkRuns[0]?.name).toBe("test-suite")
+      expect(ciStatus.checkRuns[0]?.status).toBe("completed")
+      expect(ciStatus.checkRuns[0]?.conclusion).toBe("success")
+      expect(ciStatus.checkRuns[0]?.html_url).toBe("https://github.com/owner/my-repo/runs/1")
+      expect(mock.getCombinedStatusForRef).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "my-repo",
+        ref: "abc123"
+      })
+      expect(mock.listCheckRunsForRef).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "my-repo",
+        ref: "abc123"
+      })
+    }).pipe(Effect.provide(makeTestLayer(mock)))
+  })
+
+  it.effect("getCIStatus wraps errors in GitHubClientError", () => {
+    // Arrange
+    const mock: OctokitClientService = {
+      ...makeOctokitMock(),
+      getCombinedStatusForRef: vi.fn(() => Effect.fail(new OctokitClientError({ message: "Not found", cause: null })))
+    }
+
+    return Effect.gen(function*() {
+      const client = yield* GitHubClient
+
+      // Act
+      const result = yield* client.getCIStatus(testRepo, "abc123").pipe(Effect.flip)
+
+      // Assert
+      expect(result).toBeInstanceOf(GitHubClientError)
+      expect(result.message).toContain("Failed to get CI status")
+    }).pipe(Effect.provide(makeTestLayer(mock)))
+  })
+
+  it.effect("mergePR calls octokit mergePull with correct parameters", () => {
+    // Arrange
+    const mock = makeOctokitMock()
+
+    return Effect.gen(function*() {
+      const client = yield* GitHubClient
+
+      // Act
+      yield* client.mergePR(testRepo, 42)
+
+      // Assert
+      expect(mock.mergePull).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "my-repo",
+        pullNumber: 42
+      })
+    }).pipe(Effect.provide(makeTestLayer(mock)))
+  })
+
+  it.effect("mergePR wraps errors in GitHubClientError", () => {
+    // Arrange
+    const mock: OctokitClientService = {
+      ...makeOctokitMock(),
+      mergePull: vi.fn(() => Effect.fail(new OctokitClientError({ message: "Merge conflict", cause: null })))
+    }
+
+    return Effect.gen(function*() {
+      const client = yield* GitHubClient
+
+      // Act
+      const result = yield* client.mergePR(testRepo, 42).pipe(Effect.flip)
+
+      // Assert
+      expect(result).toBeInstanceOf(GitHubClientError)
+      expect(result.message).toContain("Failed to merge PR")
+    }).pipe(Effect.provide(makeTestLayer(mock)))
+  })
+
   it.effect("wraps OctokitClient errors in GitHubClientError", () => {
     // Arrange
     const mock: OctokitClientService = {
