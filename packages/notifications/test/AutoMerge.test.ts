@@ -4,7 +4,7 @@ import { PRAutoMerged, PRCIFailed } from "../src/Events.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { AutoMerge, AutoMergeLive } from "../src/services/AutoMerge.js"
-import type { GitHubCIStatus, GitHubClientService } from "../src/services/GitHubClient.js"
+import type { GitHubClientService } from "../src/services/GitHubClient.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
 
 const makePR = (overrides: Partial<{
@@ -184,9 +184,9 @@ describe("AutoMerge", () => {
     return Effect.gen(function*() {
       const autoMerge = yield* AutoMerge
       const pr = makePR({ headSha: "same-sha" })
-
-      // Act — evaluate twice with the same SHA
       yield* autoMerge.evaluatePRs([pr])
+
+      // Act
       const events = yield* autoMerge.evaluatePRs([pr])
 
       // Assert — second call should not post a comment or emit an event
@@ -213,10 +213,9 @@ describe("AutoMerge", () => {
       const autoMerge = yield* AutoMerge
       const pr1 = makePR({ headSha: "sha-1" })
       const pr2 = makePR({ headSha: "sha-2" })
-
-      // Act — first evaluation with sha-1
       yield* autoMerge.evaluatePRs([pr1])
-      // Second evaluation with sha-2 (new push)
+
+      // Act — evaluate with sha-2 (new push)
       const events = yield* autoMerge.evaluatePRs([pr2])
 
       // Assert — should post a new comment and emit event for the new SHA
@@ -259,15 +258,13 @@ describe("AutoMerge", () => {
     return Effect.gen(function*() {
       const autoMerge = yield* AutoMerge
       const pr = makePR()
+      yield* autoMerge.evaluatePRs([pr])
 
-      // Act — first evaluation merges, second should skip
-      const firstEvents = yield* autoMerge.evaluatePRs([pr])
-      const secondEvents = yield* autoMerge.evaluatePRs([pr])
+      // Act — second evaluation should skip already-merged PR
+      const events = yield* autoMerge.evaluatePRs([pr])
 
       // Assert
-      expect(firstEvents).toHaveLength(1)
-      expect(firstEvents[0]).toBeInstanceOf(PRAutoMerged)
-      expect(secondEvents).toHaveLength(0)
+      expect(events).toHaveLength(0)
       expect(githubMock.mergePR).toHaveBeenCalledTimes(1)
     }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
   })
@@ -318,20 +315,14 @@ describe("AutoMerge", () => {
 
   it.effect("cleans up state for PRs no longer open", () => {
     // Arrange
-    let callCount = 0
-    const ciStatusResults: ReadonlyArray<GitHubCIStatus> = [
-      { state: "pending", checkRuns: [] },
-      {
+    const getCIStatusMock = vi.fn<GitHubClientService["getCIStatus"]>()
+      .mockReturnValueOnce(Effect.succeed({ state: "pending", checkRuns: [] }))
+      .mockReturnValue(Effect.succeed({
         state: "success",
         checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
-      }
-    ]
+      }))
     const githubMock = makeGitHubClientMock({
-      getCIStatus: vi.fn(() => {
-        const result = ciStatusResults[callCount] ?? { state: "success", checkRuns: [] }
-        callCount++
-        return Effect.succeed(result)
-      }),
+      getCIStatus: getCIStatusMock,
       mergePR: vi.fn(() => Effect.succeed(undefined))
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
@@ -339,12 +330,10 @@ describe("AutoMerge", () => {
     return Effect.gen(function*() {
       const autoMerge = yield* AutoMerge
       const pr = makePR({ number: 1 })
-
-      // Act — first evaluation with the PR present (pending CI)
       yield* autoMerge.evaluatePRs([pr])
-      // Second evaluation without the PR (PR closed/removed)
       yield* autoMerge.evaluatePRs([])
-      // Third evaluation with a new PR with same number (state should have been cleaned up)
+
+      // Act — evaluate with same PR number after state was cleaned up
       const events = yield* autoMerge.evaluatePRs([pr])
 
       // Assert — PR should be treated as new (no stale state)
