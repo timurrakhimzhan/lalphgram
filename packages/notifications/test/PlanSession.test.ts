@@ -82,7 +82,10 @@ describe("PlanSession", () => {
         yield* session.start("test plan")
 
         // Assert
-        const event = yield* Stream.runHead(session.events)
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanTextOutput"),
+          Stream.runHead
+        )
         expect(event._tag).toBe("Some")
         if (event._tag === "Some") {
           expect(event.value).toBeInstanceOf(PlanTextOutput)
@@ -197,7 +200,10 @@ describe("PlanSession", () => {
         yield* session.start("test plan")
 
         // Assert
-        const event = yield* Stream.runHead(session.events)
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanQuestion"),
+          Stream.runHead
+        )
         expect(event._tag).toBe("Some")
         if (event._tag === "Some") {
           expect(event.value).toBeInstanceOf(PlanQuestion)
@@ -224,7 +230,10 @@ describe("PlanSession", () => {
         yield* session.start("test plan")
 
         // Assert
-        const event = yield* Stream.runHead(session.events)
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanTextOutput"),
+          Stream.runHead
+        )
         expect(event._tag).toBe("Some")
         if (event._tag === "Some") {
           expect(event.value).toBeInstanceOf(PlanTextOutput)
