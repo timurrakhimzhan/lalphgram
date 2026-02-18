@@ -4,7 +4,7 @@
  */
 import type { Effect, Stream } from "effect"
 import { Context, Data } from "effect"
-import type { AppEvent } from "../../Events.js"
+import type { TaskTrackerEvent } from "../../Events.js"
 import type { TrackerIssue } from "../../schemas/TrackerSchemas.js"
 
 /**
@@ -21,7 +21,7 @@ export class TaskTrackerError extends Data.TaggedError("TaskTrackerError")<{
  * @category services
  */
 export interface TaskTrackerService {
-  readonly events: Stream.Stream<AppEvent, TaskTrackerError>
+  readonly events: Stream.Stream<TaskTrackerEvent, TaskTrackerError>
   readonly moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly setPriorityUrgent: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly getIssue: (issueId: string) => Effect.Effect<TrackerIssue, TaskTrackerError>

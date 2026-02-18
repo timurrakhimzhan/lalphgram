@@ -4,7 +4,7 @@
  */
 import { Array, Context, Data, Duration, Effect, HashMap, HashSet, Layer, Option, Ref, Schedule, Stream } from "effect"
 import { PRCIFailed, PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
-import type { AppEvent } from "../Events.js"
+import type { AutoMergeEvent, PullRequestEvent } from "../Events.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo as GitHubRepoClass } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
@@ -26,7 +26,7 @@ export class PullRequestTrackerError extends Data.TaggedError("PullRequestTracke
  * @category services
  */
 export interface PullRequestTrackerService {
-  readonly stream: Stream.Stream<AppEvent, PullRequestTrackerError>
+  readonly stream: Stream.Stream<PullRequestEvent, PullRequestTrackerError>
 }
 
 /**
@@ -110,7 +110,7 @@ export const PullRequestTrackerLive = Layer.effect(
           )
         )).pipe(Effect.map(Array.flatten))
 
-      const events: Array<AppEvent> = []
+      const events: Array<PullRequestEvent> = []
       const currentPRIds = HashSet.fromIterable(allPRsWithRepos.map(({ pr }) => pr.id))
 
       // Detect new PRs (only emit PROpened after first cycle)
@@ -221,7 +221,7 @@ export const PullRequestTrackerLive = Layer.effect(
       const allPRs = allPRsWithRepos.map(({ pr }) => pr)
       const autoMergeEvents = yield* autoMerge.evaluatePRs(allPRs).pipe(
         Effect.tapError((err) => Effect.logError(`AutoMerge evaluation failed: ${err.message}`)),
-        Effect.orElseSucceed(() => [] satisfies ReadonlyArray<AppEvent>)
+        Effect.orElseSucceed(() => [] satisfies ReadonlyArray<AutoMergeEvent>)
       )
       for (const event of autoMergeEvents) {
         events.push(event)
@@ -246,7 +246,7 @@ export const PullRequestTrackerLive = Layer.effect(
       return events
     })
 
-    const emptyBatch: Array<AppEvent> = []
+    const emptyBatch: Array<PullRequestEvent> = []
 
     const safePollCycle = pollCycle.pipe(
       Effect.tapError((err) => Effect.logError(`PullRequestTracker poll cycle failed: ${err.message}`)),

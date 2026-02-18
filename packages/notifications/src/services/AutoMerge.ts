@@ -4,7 +4,7 @@
  */
 import { Array, Context, Data, Effect, HashMap, HashSet, Layer, Option, Ref } from "effect"
 import { PRAutoMerged } from "../Events.js"
-import type { AppEvent } from "../Events.js"
+import type { AutoMergeEvent } from "../Events.js"
 import type { GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
@@ -26,7 +26,7 @@ export class AutoMergeError extends Data.TaggedError("AutoMergeError")<{
 export interface AutoMergeService {
   readonly evaluatePRs: (
     prs: ReadonlyArray<GitHubPullRequest>
-  ) => Effect.Effect<ReadonlyArray<AppEvent>, AutoMergeError>
+  ) => Effect.Effect<ReadonlyArray<AutoMergeEvent>, AutoMergeError>
 }
 
 /**
@@ -69,10 +69,10 @@ export const AutoMergeLive = Layer.effect(
     const evaluatePRs = (prs: ReadonlyArray<GitHubPullRequest>) =>
       Effect.gen(function*() {
         if (!config.autoMergeEnabled) {
-          return [] satisfies ReadonlyArray<AppEvent>
+          return [] satisfies ReadonlyArray<AutoMergeEvent>
         }
 
-        const events: Array<AppEvent> = []
+        const events: Array<AutoMergeEvent> = []
         const currentPRNumbers = HashSet.fromIterable(Array.map(prs, (pr) => pr.number))
         const mergedPRs = yield* Ref.get(mergedPRsRef)
 
@@ -90,7 +90,7 @@ export const AutoMergeLive = Layer.effect(
               Effect.logError(`AutoMerge evaluation failed for PR #${pr.number}`).pipe(
                 Effect.annotateLogs("error", err.message),
                 Effect.map(() =>
-                  [] satisfies ReadonlyArray<AppEvent>
+                  [] satisfies ReadonlyArray<AutoMergeEvent>
                 )
               ))
           )
@@ -117,7 +117,7 @@ export const AutoMergeLive = Layer.effect(
 
     const evaluateSinglePR = (pr: GitHubPullRequest) =>
       Effect.gen(function*() {
-        const events: Array<AppEvent> = []
+        const events: Array<AutoMergeEvent> = []
         const repo = makeRepoFromFullName(pr.repo)
         const now = Date.now()
 

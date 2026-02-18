@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
-import type { AppEvent } from "../src/Events.js"
+import type { AutoMergeEvent, PullRequestEvent } from "../src/Events.js"
 import { PRAutoMerged, PRCIFailed } from "../src/Events.js"
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
@@ -116,7 +116,7 @@ const makeGitHubClientMock = (overrides: Partial<{
 const makeAutoMergeMock = (overrides: Partial<{
   evaluatePRs: (
     prs: ReadonlyArray<GitHubPullRequest>
-  ) => Effect.Effect<ReadonlyArray<AppEvent>, never>
+  ) => Effect.Effect<ReadonlyArray<AutoMergeEvent>, never>
 }> = {}) =>
   AutoMerge.of({
     evaluatePRs: overrides.evaluatePRs ?? vi.fn(() => Effect.succeed([]))
@@ -147,7 +147,7 @@ const takeEvents = (n: number) =>
 const collectEventsFor = (ms: number) =>
   Effect.gen(function*() {
     const source = yield* PullRequestTracker
-    const collected = yield* Ref.make<Array<AppEvent>>([])
+    const collected = yield* Ref.make<Array<PullRequestEvent>>([])
     const fiber = yield* source.stream.pipe(
       Stream.runForEach((event) => Ref.update(collected, (arr) => [...arr, event])),
       Effect.fork
@@ -157,12 +157,12 @@ const collectEventsFor = (ms: number) =>
     return yield* Ref.get(collected)
   })
 
-const getPRFromEvent = (event: AppEvent | undefined) => {
+const getPRFromEvent = (event: PullRequestEvent | undefined) => {
   if (event && "pr" in event) return event.pr
   return undefined
 }
 
-const getCommentFromEvent = (event: AppEvent | undefined) => {
+const getCommentFromEvent = (event: PullRequestEvent | undefined) => {
   if (event && "comment" in event) return event.comment
   return undefined
 }

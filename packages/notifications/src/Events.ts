@@ -73,11 +73,27 @@ export class PRCIFailed extends Data.TaggedClass("PRCIFailed")<{
  * @since 1.0.0
  * @category events
  */
-export type AppEvent =
-  | TaskCreated
-  | TaskUpdated
+export type AutoMergeEvent = PRAutoMerged
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type PullRequestEvent =
   | PROpened
   | PRConflictDetected
   | PRCommentAdded
-  | PRAutoMerged
   | PRCIFailed
+  | AutoMergeEvent
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type TaskTrackerEvent = TaskCreated | TaskUpdated
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type AppEvent = PullRequestEvent | TaskTrackerEvent

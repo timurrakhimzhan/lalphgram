@@ -9,7 +9,7 @@ import {
   TaskCreated,
   TaskUpdated
 } from "../src/Events.js"
-import type { AppEvent } from "../src/Events.js"
+import type { PullRequestEvent, TaskTrackerEvent } from "../src/Events.js"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
@@ -24,7 +24,6 @@ import {
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
 import { PlanSession } from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
-import type { PullRequestTrackerError } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
@@ -67,15 +66,15 @@ const makeComment = () =>
     repo: "owner/repo"
   })
 
-const makeEventSourcesFromEvents = (events: ReadonlyArray<AppEvent>) => {
-  const githubStream: Stream.Stream<AppEvent, PullRequestTrackerError> = Stream.fromIterable(events)
-
-  return {
-    githubEventSourceMock: PullRequestTracker.of({
-      stream: githubStream
-    })
-  }
-}
+const makeEventSourcesFromEvents = (
+  prEvents: ReadonlyArray<PullRequestEvent>,
+  taskEvents: ReadonlyArray<TaskTrackerEvent> = []
+) => ({
+  githubEventSourceMock: PullRequestTracker.of({
+    stream: Stream.fromIterable(prEvents)
+  }),
+  taskEvents
+})
 
 const makeMessengerMock = (incomingMessages?: Stream.Stream<IncomingMessage>) =>
   MessengerAdapter.of({
@@ -118,19 +117,24 @@ const makePlanSessionMock = () =>
   })
 
 const makeTestLayer = (
-  events: ReadonlyArray<AppEvent>,
+  prEvents: ReadonlyArray<PullRequestEvent>,
   overrides: {
     messengerMock?: ReturnType<typeof makeMessengerMock>
     githubClientMock?: ReturnType<typeof makeGitHubClientMock>
     trackerMock?: TaskTrackerService
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
+    taskEvents?: ReadonlyArray<TaskTrackerEvent>
   } = {}
 ) => {
-  const { githubEventSourceMock } = makeEventSourcesFromEvents(events)
+  const { githubEventSourceMock, taskEvents } = makeEventSourcesFromEvents(prEvents, overrides.taskEvents)
   const messengerMock = overrides.messengerMock ?? makeMessengerMock()
   const githubClientMock = overrides.githubClientMock ?? makeGitHubClientMock()
-  const trackerMock = overrides.trackerMock ?? makeTrackerMock()
+  const baseTrackerMock = overrides.trackerMock ?? makeTrackerMock()
+  const trackerMock: TaskTrackerService = {
+    ...baseTrackerMock,
+    events: taskEvents.length > 0 ? Stream.fromIterable(taskEvents) : baseTrackerMock.events
+  }
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
 
@@ -157,7 +161,7 @@ describe("event loop dispatch", () => {
   it.effect("sends Telegram notification for TaskCreated events", () => {
     // Arrange
     const event = new TaskCreated({ issue: makeIssue() })
-    const { layer, messengerMock } = makeTestLayer([event])
+    const { layer, messengerMock } = makeTestLayer([], { taskEvents: [event] })
 
     // Act & Assert
     return Effect.gen(function*() {
@@ -172,7 +176,7 @@ describe("event loop dispatch", () => {
   it.effect("sends Telegram notification for TaskUpdated events with state transition", () => {
     // Arrange
     const event = new TaskUpdated({ issue: makeIssue(), previousState: "In Progress" })
-    const { layer, messengerMock } = makeTestLayer([event])
+    const { layer, messengerMock } = makeTestLayer([], { taskEvents: [event] })
 
     // Act & Assert
     return Effect.gen(function*() {
@@ -342,8 +346,8 @@ describe("event loop dispatch", () => {
 
   it.effect("catches dispatch errors and continues processing", () => {
     // Arrange
-    const event1 = new TaskCreated({ issue: makeIssue() })
-    const event2 = new PROpened({ pr: makePR() })
+    const event1 = new PROpened({ pr: makePR() })
+    const event2 = new PRAutoMerged({ pr: makePR() })
     const callCount = { value: 0 }
     const messengerMock = MessengerAdapter.of({
       sendMessage: vi.fn(() => {

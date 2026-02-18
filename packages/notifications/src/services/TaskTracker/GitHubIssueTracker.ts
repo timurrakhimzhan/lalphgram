@@ -4,7 +4,7 @@
  */
 import { Array, DateTime, Duration, Effect, HashMap, Layer, Option, Ref, Schedule, Stream } from "effect"
 import { TaskCreated, TaskUpdated } from "../../Events.js"
-import type { AppEvent } from "../../Events.js"
+import type { TaskTrackerEvent } from "../../Events.js"
 import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
 import { AppRuntimeConfig } from "../AppRuntimeConfig.js"
 import { OctokitClient } from "../OctokitClient.js"
@@ -68,7 +68,7 @@ export const GitHubIssueTrackerLive = Layer.effect(
 
       const issueEvents = yield* fetchRecentEvents(since)
 
-      const events: Array<AppEvent> = []
+      const events: Array<TaskTrackerEvent> = []
       for (const issueEvent of issueEvents) {
         if (issueEvent.action === "created") {
           events.push(new TaskCreated({ issue: issueEvent.issue }))
@@ -90,13 +90,13 @@ export const GitHubIssueTrackerLive = Layer.effect(
       return events
     })
 
-    const emptyBatch: Array<AppEvent> = []
+    const emptyBatch: Array<TaskTrackerEvent> = []
     const safePollCycle = pollCycle.pipe(
       Effect.tapError((err) => Effect.logError(`GitHubIssueTracker poll cycle failed: ${err.message}`)),
       Effect.orElseSucceed(() => emptyBatch)
     )
 
-    const eventStream: Stream.Stream<AppEvent, TaskTrackerError> = Stream.repeatEffectWithSchedule(
+    const eventStream: Stream.Stream<TaskTrackerEvent, TaskTrackerError> = Stream.repeatEffectWithSchedule(
       safePollCycle,
       Schedule.spaced(interval)
     ).pipe(
