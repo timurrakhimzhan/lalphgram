@@ -6,8 +6,8 @@ import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchema
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AutoMerge } from "../src/services/AutoMerge.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
-import { GitHubEventSource, GitHubEventSourceLive } from "../src/services/GitHubEventSource.js"
 import { LalphConfig } from "../src/services/LalphConfig.js"
+import { PullRequestTracker, PullRequestTrackerLive } from "../src/services/PullRequestTracker.js"
 
 const testRepo = new GitHubRepo({
   id: 1,
@@ -113,7 +113,7 @@ const makeTestLayer = (
   repoFullName: string = "owner/my-repo",
   autoMergeMock: ReturnType<typeof makeAutoMergeMock> = makeAutoMergeMock()
 ) =>
-  GitHubEventSourceLive.pipe(
+  PullRequestTrackerLive.pipe(
     Layer.provide(Layer.succeed(AutoMerge, autoMergeMock)),
     Layer.provide(Layer.succeed(GitHubClient, mock)),
     Layer.provide(runtimeConfigLayer),
@@ -122,7 +122,7 @@ const makeTestLayer = (
 
 const takeEvents = (n: number) =>
   Effect.gen(function*() {
-    const source = yield* GitHubEventSource
+    const source = yield* PullRequestTracker
     return yield* source.stream.pipe(
       Stream.take(n),
       Stream.runCollect,
@@ -132,7 +132,7 @@ const takeEvents = (n: number) =>
 
 const collectEventsFor = (ms: number) =>
   Effect.gen(function*() {
-    const source = yield* GitHubEventSource
+    const source = yield* PullRequestTracker
     const collected = yield* Ref.make<Array<AppEvent>>([])
     const fiber = yield* source.stream.pipe(
       Stream.runForEach((event) => Ref.update(collected, (arr) => [...arr, event])),
@@ -153,7 +153,7 @@ const getCommentFromEvent = (event: AppEvent | undefined) => {
   return undefined
 }
 
-describe("GitHubEventSource", () => {
+describe("PullRequestTracker", () => {
   it.live("first cycle populates known PRs without emitting PROpened", () => {
     // Arrange
     const pr = makePR({ id: 100 })

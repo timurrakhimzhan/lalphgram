@@ -15,7 +15,7 @@ import { LalphConfig } from "./LalphConfig.js"
  * @since 1.0.0
  * @category errors
  */
-export class GitHubEventSourceError extends Data.TaggedError("GitHubEventSourceError")<{
+export class PullRequestTrackerError extends Data.TaggedError("PullRequestTrackerError")<{
   message: string
   cause: unknown
 }> {}
@@ -24,17 +24,17 @@ export class GitHubEventSourceError extends Data.TaggedError("GitHubEventSourceE
  * @since 1.0.0
  * @category services
  */
-export interface GitHubEventSourceService {
-  readonly stream: Stream.Stream<AppEvent, GitHubEventSourceError>
+export interface PullRequestTrackerService {
+  readonly stream: Stream.Stream<AppEvent, PullRequestTrackerError>
 }
 
 /**
  * @since 1.0.0
  * @category context
  */
-export class GitHubEventSource extends Context.Tag("GitHubEventSource")<
-  GitHubEventSource,
-  GitHubEventSourceService
+export class PullRequestTracker extends Context.Tag("PullRequestTracker")<
+  PullRequestTracker,
+  PullRequestTrackerService
 >() {}
 
 interface PRWithRepo {
@@ -46,8 +46,8 @@ interface PRWithRepo {
  * @since 1.0.0
  * @category layers
  */
-export const GitHubEventSourceLive = Layer.effect(
-  GitHubEventSource,
+export const PullRequestTrackerLive = Layer.effect(
+  PullRequestTracker,
   Effect.gen(function*() {
     const config = yield* AppRuntimeConfig
     const lalphConfig = yield* LalphConfig
@@ -57,7 +57,7 @@ export const GitHubEventSourceLive = Layer.effect(
 
     const authenticatedUser = yield* github.getAuthenticatedUser().pipe(
       Effect.mapError((err) =>
-        new GitHubEventSourceError({ message: `Failed to get authenticated user: ${String(err)}`, cause: err })
+        new PullRequestTrackerError({ message: `Failed to get authenticated user: ${String(err)}`, cause: err })
       )
     )
 
@@ -74,7 +74,7 @@ export const GitHubEventSourceLive = Layer.effect(
 
       const allRepos = yield* github.listUserRepos().pipe(
         Effect.mapError((err) =>
-          new GitHubEventSourceError({ message: `Failed to list repos: ${String(err)}`, cause: err })
+          new PullRequestTrackerError({ message: `Failed to list repos: ${String(err)}`, cause: err })
         )
       )
 
@@ -84,7 +84,7 @@ export const GitHubEventSourceLive = Layer.effect(
         github.listOpenPRs(repo).pipe(
           Effect.map(Array.map((pr): PRWithRepo => ({ pr, repo }))),
           Effect.mapError((err) =>
-            new GitHubEventSourceError({
+            new PullRequestTrackerError({
               message: `Failed to list PRs for ${repo.full_name}: ${String(err)}`,
               cause: err
             })
@@ -112,7 +112,7 @@ export const GitHubEventSourceLive = Layer.effect(
       for (const { pr, repo } of allPRsWithRepos) {
         const issueComments = yield* github.listComments(repo, pr.number).pipe(
           Effect.mapError((err) =>
-            new GitHubEventSourceError({
+            new PullRequestTrackerError({
               message: `Failed to list comments for PR #${pr.number}: ${String(err)}`,
               cause: err
             })
@@ -120,7 +120,7 @@ export const GitHubEventSourceLive = Layer.effect(
         )
         const reviewComments = yield* github.listReviewComments(repo, pr.number).pipe(
           Effect.mapError((err) =>
-            new GitHubEventSourceError({
+            new PullRequestTrackerError({
               message: `Failed to list review comments for PR #${pr.number}: ${String(err)}`,
               cause: err
             })
@@ -170,7 +170,7 @@ export const GitHubEventSourceLive = Layer.effect(
     const emptyBatch: Array<AppEvent> = []
 
     const safePollCycle = pollCycle.pipe(
-      Effect.tapError((err) => Effect.logError(`GitHubEventSource poll cycle failed: ${err.message}`)),
+      Effect.tapError((err) => Effect.logError(`PullRequestTracker poll cycle failed: ${err.message}`)),
       Effect.orElseSucceed(() => emptyBatch)
     )
 
@@ -181,6 +181,6 @@ export const GitHubEventSourceLive = Layer.effect(
       Stream.flatMap((batch) => Stream.fromIterable(batch))
     )
 
-    return GitHubEventSource.of({ stream: eventStream })
+    return PullRequestTracker.of({ stream: eventStream })
   })
 )

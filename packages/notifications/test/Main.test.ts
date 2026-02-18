@@ -17,14 +17,14 @@ import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
 import { PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
-import { GitHubEventSource } from "../src/services/GitHubEventSource.js"
-import type { GitHubEventSourceError } from "../src/services/GitHubEventSource.js"
 import {
   IncomingMessage,
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
 import { PlanSession } from "../src/services/PlanSession.js"
+import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
+import type { PullRequestTrackerError } from "../src/services/PullRequestTracker.js"
 import { TaskEventSource } from "../src/services/TaskEventSource.js"
 import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
@@ -70,11 +70,11 @@ const makeComment = () =>
   })
 
 const makeEventSourcesFromEvents = (events: ReadonlyArray<AppEvent>) => {
-  const githubStream: Stream.Stream<AppEvent, GitHubEventSourceError> = Stream.fromIterable(events)
+  const githubStream: Stream.Stream<AppEvent, PullRequestTrackerError> = Stream.fromIterable(events)
   const taskStream: Stream.Stream<AppEvent, TaskEventSourceError> = Stream.empty
 
   return {
-    githubEventSourceMock: GitHubEventSource.of({
+    githubEventSourceMock: PullRequestTracker.of({
       stream: githubStream
     }),
     taskEventSourceMock: TaskEventSource.of({
@@ -142,7 +142,7 @@ const makeTestLayer = (
 
   return {
     layer: Layer.mergeAll(
-      Layer.succeed(GitHubEventSource, githubEventSourceMock),
+      Layer.succeed(PullRequestTracker, githubEventSourceMock),
       Layer.succeed(TaskEventSource, taskEventSourceMock),
       Layer.succeed(MessengerAdapter, messengerMock),
       Layer.succeed(GitHubClient, githubClientMock),

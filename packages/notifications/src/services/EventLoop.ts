@@ -9,12 +9,12 @@ import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AutoMergeLive } from "./AutoMerge.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
-import { GitHubEventSource, GitHubEventSourceLive } from "./GitHubEventSource.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
 import { MessengerAdapter } from "./MessengerAdapter/MessengerAdapter.js"
 import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
+import { PullRequestTracker, PullRequestTrackerLive } from "./PullRequestTracker.js"
 import { TaskEventSource, TaskEventSourceLive } from "./TaskEventSource.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 import { TrackerLayerMap } from "./TrackerLayerMap.js"
@@ -55,7 +55,7 @@ const autoMergeLayer = AutoMergeLive.pipe(
 )
 
 const eventSourcesLayer = Layer.mergeAll(
-  GitHubEventSourceLive,
+  PullRequestTrackerLive,
   TaskEventSourceLive
 ).pipe(
   Layer.provide(autoMergeLayer),
@@ -98,7 +98,7 @@ export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
 
 export const runEventLoop = Effect.gen(function*() {
-  const githubEvents = yield* GitHubEventSource
+  const githubEvents = yield* PullRequestTracker
   const taskEvents = yield* TaskEventSource
   const notifier = yield* MessengerAdapter
   const github = yield* GitHubClient

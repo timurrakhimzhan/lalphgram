@@ -66,7 +66,7 @@ export * from "./services/EventLoop.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/GitHubEventSource.js"
+export * from "./services/PullRequestTracker.js"
 
 /**
  * @since 1.0.0
