@@ -11,9 +11,9 @@ import {
 } from "../src/Events.js"
 import type { AppEvent } from "../src/Events.js"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
-import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
+import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
 import { PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
@@ -25,8 +25,6 @@ import {
 import { PlanSession } from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import type { PullRequestTrackerError } from "../src/services/PullRequestTracker.js"
-import { TaskEventSource } from "../src/services/TaskEventSource.js"
-import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
@@ -71,14 +69,10 @@ const makeComment = () =>
 
 const makeEventSourcesFromEvents = (events: ReadonlyArray<AppEvent>) => {
   const githubStream: Stream.Stream<AppEvent, PullRequestTrackerError> = Stream.fromIterable(events)
-  const taskStream: Stream.Stream<AppEvent, TaskEventSourceError> = Stream.empty
 
   return {
     githubEventSourceMock: PullRequestTracker.of({
       stream: githubStream
-    }),
-    taskEventSourceMock: TaskEventSource.of({
-      stream: taskStream
     })
   }
 }
@@ -103,7 +97,7 @@ const makeGitHubClientMock = () =>
   })
 
 const makeTrackerMock = (): TaskTrackerService => ({
-  getRecentEvents: vi.fn(() => Effect.succeed([])),
+  events: Stream.empty,
   moveToTodo: vi.fn(() => Effect.succeed(undefined)),
   setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
   getIssue: vi.fn(() => Effect.succeed(makeIssue()))
@@ -133,7 +127,7 @@ const makeTestLayer = (
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
   } = {}
 ) => {
-  const { githubEventSourceMock, taskEventSourceMock } = makeEventSourcesFromEvents(events)
+  const { githubEventSourceMock } = makeEventSourcesFromEvents(events)
   const messengerMock = overrides.messengerMock ?? makeMessengerMock()
   const githubClientMock = overrides.githubClientMock ?? makeGitHubClientMock()
   const trackerMock = overrides.trackerMock ?? makeTrackerMock()
@@ -143,7 +137,6 @@ const makeTestLayer = (
   return {
     layer: Layer.mergeAll(
       Layer.succeed(PullRequestTracker, githubEventSourceMock),
-      Layer.succeed(TaskEventSource, taskEventSourceMock),
       Layer.succeed(MessengerAdapter, messengerMock),
       Layer.succeed(GitHubClient, githubClientMock),
       Layer.succeed(TaskTracker, trackerMock),

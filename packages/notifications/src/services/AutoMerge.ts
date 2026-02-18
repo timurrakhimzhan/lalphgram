@@ -5,9 +5,9 @@
 import { Array, Context, Data, Effect, HashMap, HashSet, Layer, Option, Ref } from "effect"
 import { PRAutoMerged, PRCIFailed } from "../Events.js"
 import type { AppEvent } from "../Events.js"
-import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
+import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
 import { GitHubClient } from "./GitHubClient.js"
 
 /**

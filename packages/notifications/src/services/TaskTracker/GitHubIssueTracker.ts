@@ -2,8 +2,11 @@
  * GitHub Issues implementation of TaskTracker
  * @since 1.0.0
  */
-import { Array, Effect, Layer } from "effect"
+import { Array, DateTime, Duration, Effect, HashMap, Layer, Option, Ref, Schedule, Stream } from "effect"
+import { TaskCreated, TaskUpdated } from "../../Events.js"
+import type { AppEvent } from "../../Events.js"
 import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
+import { AppRuntimeConfig } from "../AppRuntimeConfig.js"
 import { OctokitClient } from "../OctokitClient.js"
 import { TaskTracker, TaskTrackerError } from "./TaskTracker.js"
 
@@ -25,33 +28,83 @@ export const GitHubIssueTrackerLive = Layer.effect(
   TaskTracker,
   Effect.gen(function*() {
     const octokit = yield* OctokitClient
+    const config = yield* AppRuntimeConfig
+    const interval = Duration.seconds(config.pollIntervalSeconds)
+
+    const fetchRecentEvents = (since: string) =>
+      Effect.gen(function*() {
+        const issues = yield* octokit.listUserIssues({
+          state: "all",
+          sort: "updated",
+          since
+        }).pipe(
+          Effect.mapError((err) =>
+            new TaskTrackerError({ message: `GitHub API request failed: ${String(err)}`, cause: err })
+          )
+        )
+        return Array.map(issues, (issue) => {
+          const repoFullName = extractRepoFullName(issue.repositoryUrl)
+          const trackerIssue = new TrackerIssue({
+            id: `${repoFullName}#${issue.number}`,
+            title: issue.title,
+            state: issue.state,
+            url: issue.htmlUrl,
+            createdAt: issue.createdAt,
+            updatedAt: issue.updatedAt
+          })
+          const action = issue.createdAt === issue.updatedAt ? "created" : "updated"
+          return new TrackerIssueEvent({ action, issue: trackerIssue })
+        })
+      })
+
+    const lastPollRef = yield* Ref.make(DateTime.unsafeNow())
+    const knownStatesRef = yield* Ref.make(HashMap.empty<string, string>())
+
+    const pollCycle = Effect.gen(function*() {
+      const lastPoll = yield* Ref.get(lastPollRef)
+      const since = DateTime.formatIso(lastPoll)
+      const knownStates = yield* Ref.get(knownStatesRef)
+      yield* Ref.set(lastPollRef, DateTime.unsafeNow())
+
+      const issueEvents = yield* fetchRecentEvents(since)
+
+      const events: Array<AppEvent> = []
+      for (const issueEvent of issueEvents) {
+        if (issueEvent.action === "created") {
+          events.push(new TaskCreated({ issue: issueEvent.issue }))
+          yield* Ref.update(knownStatesRef, HashMap.set(issueEvent.issue.id, issueEvent.issue.state))
+        } else {
+          const previousState = HashMap.get(knownStates, issueEvent.issue.id)
+          const stateChanged = Option.isNone(previousState) || previousState.value !== issueEvent.issue.state
+          if (stateChanged) {
+            events.push(
+              new TaskUpdated({
+                issue: issueEvent.issue,
+                previousState: Option.getOrElse(previousState, () => "Unknown")
+              })
+            )
+          }
+          yield* Ref.update(knownStatesRef, HashMap.set(issueEvent.issue.id, issueEvent.issue.state))
+        }
+      }
+      return events
+    })
+
+    const emptyBatch: Array<AppEvent> = []
+    const safePollCycle = pollCycle.pipe(
+      Effect.tapError((err) => Effect.logError(`GitHubIssueTracker poll cycle failed: ${err.message}`)),
+      Effect.orElseSucceed(() => emptyBatch)
+    )
+
+    const eventStream: Stream.Stream<AppEvent, TaskTrackerError> = Stream.repeatEffectWithSchedule(
+      safePollCycle,
+      Schedule.spaced(interval)
+    ).pipe(
+      Stream.flatMap((batch) => Stream.fromIterable(batch))
+    )
 
     return TaskTracker.of({
-      getRecentEvents: (since) =>
-        Effect.gen(function*() {
-          const issues = yield* octokit.listUserIssues({
-            state: "all",
-            sort: "updated",
-            since
-          }).pipe(
-            Effect.mapError((err) =>
-              new TaskTrackerError({ message: `GitHub API request failed: ${String(err)}`, cause: err })
-            )
-          )
-          return Array.map(issues, (issue): TrackerIssueEvent => {
-            const repoFullName = extractRepoFullName(issue.repositoryUrl)
-            const trackerIssue = new TrackerIssue({
-              id: `${repoFullName}#${issue.number}`,
-              title: issue.title,
-              state: issue.state,
-              url: issue.htmlUrl,
-              createdAt: issue.createdAt,
-              updatedAt: issue.updatedAt
-            })
-            const action = issue.createdAt === issue.updatedAt ? "created" : "updated"
-            return new TrackerIssueEvent({ action, issue: trackerIssue })
-          })
-        }),
+      events: eventStream,
 
       moveToTodo: (issueId) =>
         Effect.gen(function*() {

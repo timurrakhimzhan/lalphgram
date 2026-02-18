@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import { AppRuntimeConfig, RuntimeConfig } from "../../src/services/AppRuntimeConfig.js"
 import type { LinearSdkClientService } from "../../src/services/LinearSdkClient.js"
 import { LinearSdkClient, LinearSdkClientError } from "../../src/services/LinearSdkClient.js"
 import type { OctokitClientService } from "../../src/services/OctokitClient.js"
@@ -7,6 +8,14 @@ import { OctokitClient, OctokitClientError } from "../../src/services/OctokitCli
 import { GitHubIssueTrackerLive } from "../../src/services/TaskTracker/GitHubIssueTracker.js"
 import { LinearTrackerLive } from "../../src/services/TaskTracker/LinearTracker.js"
 import { TaskTracker, TaskTrackerError } from "../../src/services/TaskTracker/TaskTracker.js"
+
+const runtimeConfig = new RuntimeConfig({
+  pollIntervalSeconds: 1,
+  triggerKeyword: "urgent",
+  timerDelaySeconds: 300
+})
+
+const runtimeConfigLayer = Layer.succeed(AppRuntimeConfig, runtimeConfig)
 
 const makeLinearSdkMock = (overrides: Partial<LinearSdkClientService> = {}): LinearSdkClientService =>
   LinearSdkClient.of({
@@ -30,69 +39,11 @@ const makeLinearSdkMock = (overrides: Partial<LinearSdkClientService> = {}): Lin
 
 const makeLinearTrackerTestLayer = (mock: LinearSdkClientService) =>
   LinearTrackerLive.pipe(
-    Layer.provide(Layer.succeed(LinearSdkClient, mock))
+    Layer.provide(Layer.succeed(LinearSdkClient, mock)),
+    Layer.provide(runtimeConfigLayer)
   )
 
 describe("LinearTracker", () => {
-  it.effect("getRecentEvents returns created events for new issues", () => {
-    // Arrange
-    const mock = makeLinearSdkMock({
-      listIssues: vi.fn(() =>
-        Effect.succeed([{
-          id: "id-1",
-          identifier: "RAK-1",
-          title: "Test issue",
-          url: "https://linear.app/RAK-1",
-          createdAt: "2024-01-02T00:00:00.000Z",
-          updatedAt: "2024-01-02T00:00:00.000Z",
-          stateName: "In Progress"
-        }])
-      )
-    })
-
-    return Effect.gen(function*() {
-      const tracker = yield* TaskTracker
-
-      // Act
-      const events = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z")
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]?.action).toBe("created")
-      expect(events[0]?.issue.id).toBe("RAK-1")
-      expect(events[0]?.issue.title).toBe("Test issue")
-      expect(mock.listIssues).toHaveBeenCalledWith({ since: "2024-01-01T00:00:00Z" })
-    }).pipe(Effect.provide(makeLinearTrackerTestLayer(mock)))
-  })
-
-  it.effect("getRecentEvents returns updated events when timestamps differ", () => {
-    // Arrange
-    const mock = makeLinearSdkMock({
-      listIssues: vi.fn(() =>
-        Effect.succeed([{
-          id: "id-1",
-          identifier: "RAK-2",
-          title: "Updated issue",
-          url: "https://linear.app/RAK-2",
-          createdAt: "2024-01-02T00:00:00.000Z",
-          updatedAt: "2024-01-03T00:00:00.000Z",
-          stateName: "Done"
-        }])
-      )
-    })
-
-    return Effect.gen(function*() {
-      const tracker = yield* TaskTracker
-
-      // Act
-      const events = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z")
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]?.action).toBe("updated")
-    }).pipe(Effect.provide(makeLinearTrackerTestLayer(mock)))
-  })
-
   it.effect("moveToTodo resolves Todo state ID and updates issue", () => {
     // Arrange
     const mock = makeLinearSdkMock({
@@ -167,7 +118,7 @@ describe("LinearTracker", () => {
   it.effect("wraps LinearSdkClient errors in TaskTrackerError", () => {
     // Arrange
     const mock = makeLinearSdkMock({
-      listIssues: vi.fn(() =>
+      getIssue: vi.fn(() =>
         Effect.fail(new LinearSdkClientError({ message: "API error", cause: new Error("API error") }))
       )
     })
@@ -176,11 +127,11 @@ describe("LinearTracker", () => {
       const tracker = yield* TaskTracker
 
       // Act
-      const result = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z").pipe(Effect.flip)
+      const result = yield* tracker.getIssue("issue-id-1").pipe(Effect.flip)
 
       // Assert
       expect(result).toBeInstanceOf(TaskTrackerError)
-      expect(result.message).toContain("Failed to get recent events")
+      expect(result.message).toContain("Failed to get issue")
     }).pipe(Effect.provide(makeLinearTrackerTestLayer(mock)))
   })
 })
@@ -226,74 +177,11 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
 
 const makeGitHubIssueTrackerTestLayer = (mock: OctokitClientService) =>
   GitHubIssueTrackerLive.pipe(
-    Layer.provide(Layer.succeed(OctokitClient, mock))
+    Layer.provide(Layer.succeed(OctokitClient, mock)),
+    Layer.provide(runtimeConfigLayer)
   )
 
 describe("GitHubIssueTracker", () => {
-  it.effect("getRecentEvents returns created events for new issues", () => {
-    // Arrange
-    const mock = makeGitHubOctokitMock({
-      listUserIssues: vi.fn(() =>
-        Effect.succeed([{
-          number: 42,
-          title: "New issue",
-          state: "open",
-          htmlUrl: "https://github.com/owner/repo/issues/42",
-          createdAt: "2024-01-02T00:00:00Z",
-          updatedAt: "2024-01-02T00:00:00Z",
-          repositoryUrl: "https://api.github.com/repos/owner/repo"
-        }])
-      )
-    })
-
-    return Effect.gen(function*() {
-      const tracker = yield* TaskTracker
-
-      // Act
-      const events = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z")
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]?.action).toBe("created")
-      expect(events[0]?.issue.id).toBe("owner/repo#42")
-      expect(events[0]?.issue.title).toBe("New issue")
-      expect(mock.listUserIssues).toHaveBeenCalledWith({
-        state: "all",
-        sort: "updated",
-        since: "2024-01-01T00:00:00Z"
-      })
-    }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
-  })
-
-  it.effect("getRecentEvents returns updated events when timestamps differ", () => {
-    // Arrange
-    const mock = makeGitHubOctokitMock({
-      listUserIssues: vi.fn(() =>
-        Effect.succeed([{
-          number: 43,
-          title: "Updated issue",
-          state: "open",
-          htmlUrl: "https://github.com/owner/repo/issues/43",
-          createdAt: "2024-01-02T00:00:00Z",
-          updatedAt: "2024-01-03T00:00:00Z",
-          repositoryUrl: "https://api.github.com/repos/owner/repo"
-        }])
-      )
-    })
-
-    return Effect.gen(function*() {
-      const tracker = yield* TaskTracker
-
-      // Act
-      const events = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z")
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]?.action).toBe("updated")
-      expect(events[0]?.issue.id).toBe("owner/repo#43")
-    }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
-  })
-
   it.effect("moveToTodo adds a todo label to the issue", () => {
     // Arrange
     const mock = makeGitHubOctokitMock()
@@ -371,7 +259,7 @@ describe("GitHubIssueTracker", () => {
   it.effect("wraps OctokitClient errors in TaskTrackerError", () => {
     // Arrange
     const mock = makeGitHubOctokitMock({
-      listUserIssues: vi.fn(() =>
+      getIssue: vi.fn(() =>
         Effect.fail(new OctokitClientError({ message: "Unauthorized", cause: new Error("Unauthorized") }))
       )
     })
@@ -380,7 +268,7 @@ describe("GitHubIssueTracker", () => {
       const tracker = yield* TaskTracker
 
       // Act
-      const result = yield* tracker.getRecentEvents("2024-01-01T00:00:00Z").pipe(Effect.flip)
+      const result = yield* tracker.getIssue("owner/repo#42").pipe(Effect.flip)
 
       // Assert
       expect(result).toBeInstanceOf(TaskTrackerError)

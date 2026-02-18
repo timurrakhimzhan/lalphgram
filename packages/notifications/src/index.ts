@@ -71,11 +71,6 @@ export * from "./services/PullRequestTracker.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/TaskEventSource.js"
-
-/**
- * @since 1.0.0
- */
 export * from "./services/CommentTimer.js"
 
 /**
@@ -102,6 +97,11 @@ export * from "./services/TelegramConfig.js"
  * @since 1.0.0
  */
 export * from "./services/AppContext.js"
+
+/**
+ * @since 1.0.0
+ */
+export * from "./services/AppRuntimeConfig.js"
 
 /**
  * @since 1.0.0

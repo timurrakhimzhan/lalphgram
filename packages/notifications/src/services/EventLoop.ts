@@ -15,7 +15,6 @@ import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
 import { PullRequestTracker, PullRequestTrackerLive } from "./PullRequestTracker.js"
-import { TaskEventSource, TaskEventSourceLive } from "./TaskEventSource.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 import { TrackerLayerMap } from "./TrackerLayerMap.js"
 
@@ -54,10 +53,7 @@ const autoMergeLayer = AutoMergeLive.pipe(
   Layer.provide(servicesLayer)
 )
 
-const eventSourcesLayer = Layer.mergeAll(
-  PullRequestTrackerLive,
-  TaskEventSourceLive
-).pipe(
+const eventSourcesLayer = PullRequestTrackerLive.pipe(
   Layer.provide(autoMergeLayer),
   Layer.provide(servicesLayer),
   Layer.provide(lalphConfigLayer)
@@ -99,7 +95,6 @@ const DONE_BUTTON_LABEL = "Done"
 
 export const runEventLoop = Effect.gen(function*() {
   const githubEvents = yield* PullRequestTracker
-  const taskEvents = yield* TaskEventSource
   const notifier = yield* MessengerAdapter
   const github = yield* GitHubClient
   const timer = yield* CommentTimer
@@ -272,7 +267,7 @@ export const runEventLoop = Effect.gen(function*() {
 
   const mergedStream = Stream.merge(
     githubEvents.stream,
-    taskEvents.stream
+    tracker.events
   )
 
   yield* notifier.sendMessage({

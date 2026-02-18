@@ -2,9 +2,10 @@
  * TaskTracker service interface for task tracking backends
  * @since 1.0.0
  */
-import type { Effect } from "effect"
+import type { Effect, Stream } from "effect"
 import { Context, Data } from "effect"
-import type { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
+import type { AppEvent } from "../../Events.js"
+import type { TrackerIssue } from "../../schemas/TrackerSchemas.js"
 
 /**
  * @since 1.0.0
@@ -20,9 +21,7 @@ export class TaskTrackerError extends Data.TaggedError("TaskTrackerError")<{
  * @category services
  */
 export interface TaskTrackerService {
-  readonly getRecentEvents: (
-    since: string
-  ) => Effect.Effect<ReadonlyArray<TrackerIssueEvent>, TaskTrackerError>
+  readonly events: Stream.Stream<AppEvent, TaskTrackerError>
   readonly moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly setPriorityUrgent: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly getIssue: (issueId: string) => Effect.Effect<TrackerIssue, TaskTrackerError>

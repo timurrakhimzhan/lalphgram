@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Duration, Effect, Layer, Stream } from "effect"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
-import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
+import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { CommentTimer, CommentTimerLive } from "../src/services/CommentTimer.js"
 import type { MessengerAdapterError, OutgoingMessage } from "../src/services/MessengerAdapter/MessengerAdapter.js"
 import { MessengerAdapter } from "../src/services/MessengerAdapter/MessengerAdapter.js"
@@ -50,7 +50,7 @@ const makeComment = (overrides: Partial<{
 const makeTrackerMock = (overrides: Partial<{
   moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
 }> = {}): TaskTrackerService => ({
-  getRecentEvents: vi.fn(() => Effect.succeed([])),
+  events: Stream.empty,
   moveToTodo: overrides.moveToTodo ?? vi.fn(() => Effect.succeed(undefined)),
   setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
   getIssue: vi.fn(() =>

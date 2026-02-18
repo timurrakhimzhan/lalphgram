@@ -4,8 +4,8 @@
  */
 import { Context, Data, Duration, Effect, Fiber, HashMap, Layer, Option, Ref } from "effect"
 import { BranchParser } from "../lib/BranchParser.js"
-import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
 import type { GitHubComment, GitHubPullRequest } from "../schemas/GitHubSchemas.js"
+import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
 import { MessengerAdapter } from "./MessengerAdapter/MessengerAdapter.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 
