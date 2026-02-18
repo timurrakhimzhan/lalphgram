@@ -23,6 +23,7 @@
     "dev": "LOG_LEVEL=DEBUG tsx src/Main.ts",
     "start": "node build/esm/Main.js",
     "test": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "coverage": "vitest --coverage"
   },
   "dependencies": {

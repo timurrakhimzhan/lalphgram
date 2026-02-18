@@ -10,6 +10,7 @@ import { Effect, flow, Option, Schema, Stream } from "effect"
  */
 export const ContentBlock = Schema.Struct({
   type: Schema.String,
+  id: Schema.optional(Schema.String),
   text: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   input: Schema.optional(Schema.Unknown)
@@ -56,6 +57,20 @@ export const Question = Schema.Struct({
 export const AskUserQuestionInput = Schema.Struct({
   questions: Schema.optional(Schema.Array(Question))
 })
+
+/**
+ * @since 1.0.0
+ * @category schemas
+ */
+export class StreamJsonInput extends Schema.Class<StreamJsonInput>("StreamJsonInput")({
+  type: Schema.Literal("user"),
+  message: Schema.Struct({
+    role: Schema.Literal("user"),
+    content: Schema.String
+  }),
+  session_id: Schema.String,
+  parent_tool_use_id: Schema.NullOr(Schema.String)
+}) {}
 
 const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
 
