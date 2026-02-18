@@ -82,6 +82,7 @@ const lalphNotifyCommand = CliCommand.make(
           const shimPath = pathService.join(shimDir, "claude")
           const shimScript = [
             "#!/bin/bash",
+            `echo "claude-shim: intercepted call, adding --output-format stream-json, args: $*" >&2`,
             `exec ${JSON.stringify(realClaudePath)} --output-format stream-json "$@"`
           ].join("\n")
           yield* fs.writeFileString(shimPath, shimScript)
