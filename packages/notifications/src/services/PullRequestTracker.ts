@@ -3,9 +3,10 @@
  * @since 1.0.0
  */
 import { Array, Context, Data, Duration, Effect, HashMap, HashSet, Layer, Option, Ref, Schedule, Stream } from "effect"
-import { PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
+import { PRCIFailed, PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
 import type { AppEvent } from "../Events.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
+import { GitHubRepo as GitHubRepoClass } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
 import { AutoMerge } from "./AutoMerge.js"
 import { GitHubClient } from "./GitHubClient.js"
@@ -42,6 +43,23 @@ interface PRWithRepo {
   readonly repo: GitHubRepo
 }
 
+const makeRepoFromFullName = (fullName: string) =>
+  new GitHubRepoClass({
+    id: 0,
+    name: "",
+    full_name: fullName,
+    owner: { login: "" },
+    html_url: ""
+  })
+
+const isCIFailed = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
+  const anyCheckFailed = Array.some(
+    checkRuns,
+    (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
+  )
+  return state === "failure" || anyCheckFailed
+}
+
 /**
  * @since 1.0.0
  * @category layers
@@ -64,6 +82,7 @@ export const PullRequestTrackerLive = Layer.effect(
     const knownPRsRef = yield* Ref.make(HashSet.empty<number>())
     const conflictNotifiedRef = yield* Ref.make(HashSet.empty<number>())
     const lastCommentIdsRef = yield* Ref.make(HashMap.empty<number, number>())
+    const failureNotifiedRef = yield* Ref.make(HashMap.empty<number, string>())
     const isFirstCycleRef = yield* Ref.make(true)
 
     const pollCycle = Effect.gen(function*() {
@@ -145,6 +164,59 @@ export const PullRequestTrackerLive = Layer.effect(
         }
       }
 
+      // Detect CI failures
+      for (const { pr } of allPRsWithRepos) {
+        const repo = makeRepoFromFullName(pr.repo)
+        const ciStatus = yield* github.getCIStatus(repo, pr.headSha).pipe(
+          Effect.mapError((err) =>
+            new PullRequestTrackerError({
+              message: `Failed to get CI status for PR #${pr.number}: ${String(err)}`,
+              cause: err
+            })
+          )
+        )
+
+        if (isCIFailed(ciStatus.state, ciStatus.checkRuns)) {
+          const failureNotified = yield* Ref.get(failureNotifiedRef)
+          const notifiedSha = HashMap.get(failureNotified, pr.number)
+          const alreadyNotified = Option.isSome(notifiedSha) && notifiedSha.value === pr.headSha
+
+          if (!alreadyNotified) {
+            const failedChecks = Array.filter(
+              ciStatus.checkRuns,
+              (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
+            )
+
+            const failedCheckNames = Array.map(failedChecks, (cr) => `- ${cr.name}: ${cr.conclusion}`).join("\n")
+            yield* github.postComment(
+              repo,
+              pr.number,
+              `CI checks failed for this PR:\n${failedCheckNames}`
+            ).pipe(
+              Effect.mapError((err) =>
+                new PullRequestTrackerError({
+                  message: `Failed to post CI failure comment for PR #${pr.number}: ${String(err)}`,
+                  cause: err
+                })
+              )
+            )
+
+            yield* Ref.update(failureNotifiedRef, (m) => HashMap.set(m, pr.number, pr.headSha))
+
+            events.push(
+              new PRCIFailed({
+                pr,
+                failedChecks: Array.map(failedChecks, (cr) => ({
+                  name: cr.name,
+                  html_url: cr.html_url,
+                  conclusion: cr.conclusion ?? "unknown"
+                }))
+              })
+            )
+          }
+        }
+      }
+
       // Evaluate auto-merge for all open PRs
       const allPRs = allPRsWithRepos.map(({ pr }) => pr)
       const autoMergeEvents = yield* autoMerge.evaluatePRs(allPRs).pipe(
@@ -162,6 +234,13 @@ export const PullRequestTrackerLive = Layer.effect(
         allPRsWithRepos.filter(({ pr }) => pr.hasConflicts).map(({ pr }) => pr.id)
       )
       yield* Ref.set(conflictNotifiedRef, conflictedIds)
+
+      const currentPRNumbers = HashSet.fromIterable(allPRsWithRepos.map(({ pr }) => pr.number))
+      yield* Ref.update(
+        failureNotifiedRef,
+        (m) => HashMap.filter(m, (_, prNumber) => HashSet.has(currentPRNumbers, prNumber))
+      )
+
       yield* Ref.set(isFirstCycleRef, false)
 
       return events

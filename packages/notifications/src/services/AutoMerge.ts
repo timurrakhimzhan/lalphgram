@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { Array, Context, Data, Effect, HashMap, HashSet, Layer, Option, Ref } from "effect"
-import { PRAutoMerged, PRCIFailed } from "../Events.js"
+import { PRAutoMerged } from "../Events.js"
 import type { AppEvent } from "../Events.js"
 import type { GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
@@ -51,14 +51,6 @@ const isCISuccess = (state: string, checkRuns: ReadonlyArray<{ readonly conclusi
   return allChecksCompleted && allChecksPassed && state !== "failure"
 }
 
-const isCIFailed = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
-  const anyCheckFailed = Array.some(
-    checkRuns,
-    (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
-  )
-  return state === "failure" || anyCheckFailed
-}
-
 /**
  * @since 1.0.0
  * @category layers
@@ -71,8 +63,6 @@ export const AutoMergeLive = Layer.effect(
 
     // headShaTimestamps: tracks when we first saw each PR's current head SHA (PR number -> { sha, timestamp })
     const headShaTimestampsRef = yield* Ref.make(HashMap.empty<number, { sha: string; timestamp: number }>())
-    // failureNotified: tracks which SHA we last notified a CI failure for (PR number -> sha)
-    const failureNotifiedRef = yield* Ref.make(HashMap.empty<number, string>())
     // mergedPRs: set of PR numbers we've already merged
     const mergedPRsRef = yield* Ref.make(HashSet.empty<number>())
 
@@ -114,12 +104,8 @@ export const AutoMergeLive = Layer.effect(
         yield* Ref.update(headShaTimestampsRef, (m) =>
           HashMap.filter(m, (_, prNumber) =>
             HashSet.has(currentPRNumbers, prNumber)))
-        yield* Ref.update(failureNotifiedRef, (m) =>
-          HashMap.filter(m, (_, prNumber) =>
-            HashSet.has(currentPRNumbers, prNumber)))
         yield* Ref.update(mergedPRsRef, (s) =>
-          HashSet.filter(s, (prNumber) =>
-            HashSet.has(currentPRNumbers, prNumber)))
+          HashSet.filter(s, (prNumber) => HashSet.has(currentPRNumbers, prNumber)))
 
         return events
       }).pipe(
@@ -145,10 +131,6 @@ export const AutoMergeLive = Layer.effect(
 
         if (shaChanged) {
           yield* Ref.update(headShaTimestampsRef, (m) => HashMap.set(m, pr.number, { sha: currentSha, timestamp: now }))
-          // Reset failure notification if SHA changed (not first time)
-          if (Option.isSome(existingEntry)) {
-            yield* Ref.update(failureNotifiedRef, (m) => HashMap.remove(m, pr.number))
-          }
         }
 
         const shaEntry = yield* Ref.get(headShaTimestampsRef).pipe(
@@ -163,42 +145,6 @@ export const AutoMergeLive = Layer.effect(
 
         // Get CI status
         const ciStatus = yield* github.getCIStatus(repo, currentSha)
-
-        if (isCIFailed(ciStatus.state, ciStatus.checkRuns)) {
-          // Post failure comment if not already notified for this SHA
-          const failureNotified = yield* Ref.get(failureNotifiedRef)
-          const notifiedSha = HashMap.get(failureNotified, pr.number)
-          const alreadyNotified = Option.isSome(notifiedSha) && notifiedSha.value === currentSha
-
-          if (!alreadyNotified) {
-            const failedChecks = Array.filter(
-              ciStatus.checkRuns,
-              (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
-            )
-
-            const failedCheckNames = Array.map(failedChecks, (cr) => `- ${cr.name}: ${cr.conclusion}`).join("\n")
-            yield* github.postComment(
-              repo,
-              pr.number,
-              `CI checks failed for this PR:\n${failedCheckNames}`
-            )
-
-            yield* Ref.update(failureNotifiedRef, (m) => HashMap.set(m, pr.number, currentSha))
-
-            events.push(
-              new PRCIFailed({
-                pr,
-                failedChecks: Array.map(failedChecks, (cr) => ({
-                  name: cr.name,
-                  html_url: cr.html_url,
-                  conclusion: cr.conclusion ?? "unknown"
-                }))
-              })
-            )
-          }
-
-          return events
-        }
 
         if (isCISuccess(ciStatus.state, ciStatus.checkRuns)) {
           if (elapsed < waitMs) {

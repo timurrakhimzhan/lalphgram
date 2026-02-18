@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import type { AppEvent } from "../src/Events.js"
-import { PRAutoMerged } from "../src/Events.js"
+import { PRAutoMerged, PRCIFailed } from "../src/Events.js"
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge } from "../src/services/AutoMerge.js"
@@ -86,16 +86,30 @@ const makeGitHubClientMock = (overrides: Partial<{
     repo: GitHubRepo,
     prNumber: number
   ) => Effect.Effect<ReadonlyArray<GitHubComment>, GitHubClientError>
+  getCIStatus: (
+    repo: GitHubRepo,
+    sha: string
+  ) => Effect.Effect<{
+    state: string
+    checkRuns: ReadonlyArray<{
+      id: number
+      name: string
+      status: string
+      conclusion: string | null
+      html_url: string
+    }>
+  }, GitHubClientError>
+  postComment: (repo: GitHubRepo, prNumber: number, body: string) => Effect.Effect<void, GitHubClientError>
 }> = {}) =>
   GitHubClient.of({
     getAuthenticatedUser: overrides.getAuthenticatedUser ?? vi.fn(() => Effect.succeed({ login: "me" })),
     listUserRepos: overrides.listUserRepos ?? vi.fn(() => Effect.succeed([testRepo])),
     listOpenPRs: overrides.listOpenPRs ?? vi.fn(() => Effect.succeed([])),
     getPR: vi.fn(() => Effect.succeed(makePR())),
-    postComment: vi.fn(() => Effect.succeed(undefined)),
+    postComment: overrides.postComment ?? vi.fn(() => Effect.succeed(undefined)),
     listComments: overrides.listComments ?? vi.fn(() => Effect.succeed([])),
     listReviewComments: overrides.listReviewComments ?? vi.fn(() => Effect.succeed([])),
-    getCIStatus: vi.fn(() => Effect.succeed({ state: "success", checkRuns: [] })),
+    getCIStatus: overrides.getCIStatus ?? vi.fn(() => Effect.succeed({ state: "success", checkRuns: [] })),
     mergePR: vi.fn(() => Effect.succeed(undefined))
   })
 
@@ -424,6 +438,105 @@ describe("PullRequestTracker", () => {
         expect(autoMergeMock.evaluatePRs).toHaveBeenCalledWith([
           expect.objectContaining({ id: 100 })
         ])
+      })
+    )
+  })
+
+  it.live("emits PRCIFailed when CI fails for a PR", () => {
+    // Arrange
+    const pr = makePR({ id: 100 })
+    const postCommentMock = vi.fn(() => Effect.succeed(undefined))
+    const mock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([pr])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "https://example.com/run/1" },
+            { id: 2, name: "lint", status: "completed", conclusion: "success", html_url: "" }
+          ]
+        })
+      ),
+      postComment: postCommentMock
+    })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(mock)),
+      Effect.map((events) => {
+        // Assert
+        const ciFailedEvents = events.filter((e) => e._tag === "PRCIFailed")
+        expect(ciFailedEvents).toHaveLength(1)
+        expect(ciFailedEvents[0]).toBeInstanceOf(PRCIFailed)
+        expect(postCommentMock).toHaveBeenCalledWith(
+          expect.objectContaining({ full_name: "owner/my-repo" }),
+          1,
+          expect.stringContaining("build: failure")
+        )
+      })
+    )
+  })
+
+  it.live("does not duplicate PRCIFailed for same SHA", () => {
+    // Arrange
+    const pr = makePR({ id: 100, headSha: "same-sha" })
+    const postCommentMock = vi.fn(() => Effect.succeed(undefined))
+    const mock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([pr])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
+          ]
+        })
+      ),
+      postComment: postCommentMock
+    })
+
+    // Act — collect events over enough time for multiple poll cycles
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(mock)),
+      Effect.map((events) => {
+        // Assert — only one PRCIFailed event despite multiple cycles
+        const ciFailedEvents = events.filter((e) => e._tag === "PRCIFailed")
+        expect(ciFailedEvents).toHaveLength(1)
+        expect(postCommentMock).toHaveBeenCalledTimes(1)
+      })
+    )
+  })
+
+  it.live("resets failure tracking when SHA changes", () => {
+    // Arrange
+    let callCount = 0
+    const pr1 = makePR({ id: 100, headSha: "sha-1" })
+    const pr2 = makePR({ id: 100, headSha: "sha-2" })
+    const postCommentMock = vi.fn(() => Effect.succeed(undefined))
+    const mock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => {
+        callCount++
+        if (callCount <= 1) return Effect.succeed([pr1])
+        return Effect.succeed([pr2])
+      }),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
+          ]
+        })
+      ),
+      postComment: postCommentMock
+    })
+
+    // Act — take 2 PRCIFailed events (one per SHA)
+    return takeEvents(2).pipe(
+      Effect.provide(makeTestLayer(mock)),
+      Effect.map((events) => {
+        // Assert — two events for two different SHAs
+        const ciFailedEvents = events.filter((e) => e._tag === "PRCIFailed")
+        expect(ciFailedEvents).toHaveLength(2)
+        expect(postCommentMock).toHaveBeenCalledTimes(2)
       })
     )
   })

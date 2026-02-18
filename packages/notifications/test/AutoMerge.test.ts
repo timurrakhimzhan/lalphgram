@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { PRAutoMerged, PRCIFailed } from "../src/Events.js"
+import { PRAutoMerged } from "../src/Events.js"
 import { GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge, AutoMergeLive } from "../src/services/AutoMerge.js"
@@ -132,97 +132,6 @@ describe("AutoMerge", () => {
       expect(events).toHaveLength(0)
       expect(githubMock.mergePR).not.toHaveBeenCalled()
     }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
-  })
-
-  it.effect("posts failure comment when CI fails", () => {
-    // Arrange
-    const githubMock = makeGitHubClientMock({
-      getCIStatus: vi.fn(() =>
-        Effect.succeed({
-          state: "failure",
-          checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "https://example.com/run/1" },
-            { id: 2, name: "lint", status: "completed", conclusion: "success", html_url: "" }
-          ]
-        })
-      ),
-      postComment: vi.fn(() => Effect.succeed(undefined))
-    })
-
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]).toBeInstanceOf(PRCIFailed)
-      expect(githubMock.postComment).toHaveBeenCalledWith(
-        expect.objectContaining({ full_name: "owner/my-repo" }),
-        1,
-        expect.stringContaining("build: failure")
-      )
-    }).pipe(Effect.provide(makeTestLayer(githubMock)))
-  })
-
-  it.effect("does not duplicate failure comment for same SHA", () => {
-    // Arrange
-    const githubMock = makeGitHubClientMock({
-      getCIStatus: vi.fn(() =>
-        Effect.succeed({
-          state: "failure",
-          checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
-          ]
-        })
-      ),
-      postComment: vi.fn(() => Effect.succeed(undefined))
-    })
-
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR({ headSha: "same-sha" })
-      yield* autoMerge.evaluatePRs([pr])
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert — second call should not post a comment or emit an event
-      expect(events).toHaveLength(0)
-      expect(githubMock.postComment).toHaveBeenCalledTimes(1)
-    }).pipe(Effect.provide(makeTestLayer(githubMock)))
-  })
-
-  it.effect("resets failure tracking when SHA changes", () => {
-    // Arrange
-    const githubMock = makeGitHubClientMock({
-      getCIStatus: vi.fn(() =>
-        Effect.succeed({
-          state: "failure",
-          checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
-          ]
-        })
-      ),
-      postComment: vi.fn(() => Effect.succeed(undefined))
-    })
-
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr1 = makePR({ headSha: "sha-1" })
-      const pr2 = makePR({ headSha: "sha-2" })
-      yield* autoMerge.evaluatePRs([pr1])
-
-      // Act — evaluate with sha-2 (new push)
-      const events = yield* autoMerge.evaluatePRs([pr2])
-
-      // Assert — should post a new comment and emit event for the new SHA
-      expect(events).toHaveLength(1)
-      expect(events[0]).toBeInstanceOf(PRCIFailed)
-      expect(githubMock.postComment).toHaveBeenCalledTimes(2)
-    }).pipe(Effect.provide(makeTestLayer(githubMock)))
   })
 
   it.effect("skips PRs with merge conflicts", () => {
