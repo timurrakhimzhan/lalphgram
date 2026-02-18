@@ -162,6 +162,9 @@ export const PlanSessionLive = Layer.scoped(
         )
 
         yield* Ref.set(sessionRef, Option.some({ process, scope: processScope }))
+        yield* Effect.log("Plan session process spawned").pipe(
+          Effect.annotateLogs({ tempFile })
+        )
 
         const decoder = new TextDecoder()
 
@@ -170,11 +173,18 @@ export const PlanSessionLive = Layer.scoped(
           parseNdjsonMessages,
           Stream.mapEffect((msg) =>
             Effect.gen(function*() {
+              yield* Effect.logDebug("Received stream message").pipe(
+                Effect.annotateLogs({
+                  messageType: msg.type,
+                  ...(msg.subtype != null ? { subtype: msg.subtype } : {})
+                })
+              )
               if (msg.type !== "assistant" || msg.message?.content == null) return
               for (const block of msg.message.content) {
                 if (block.type === "text" && block.text != null) {
                   yield* Queue.offer(eventQueue, new PlanTextOutput({ text: block.text }))
                 } else if (block.type === "tool_use" && block.name === "AskUserQuestion") {
+                  yield* Effect.log("AskUserQuestion detected")
                   const parsed = yield* decodeAskInput(block.input).pipe(
                     Effect.orElseSucceed(() => ({ questions: undefined }))
                   )
@@ -182,6 +192,9 @@ export const PlanSessionLive = Layer.scoped(
                     yield* Queue.offer(eventQueue, new PlanQuestion({ questions: parsed.questions }))
                   }
                 } else if (block.type === "tool_use" && block.name != null) {
+                  yield* Effect.log("Tool invoked").pipe(
+                    Effect.annotateLogs({ tool: block.name })
+                  )
                   yield* Queue.offer(
                     eventQueue,
                     new PlanTextOutput({ text: `▶ ${block.name}` })
@@ -205,7 +218,14 @@ export const PlanSessionLive = Layer.scoped(
             const lines = text.split("\n").filter((line) => line.trim().length > 0)
             return Stream.fromIterable(lines)
           }),
-          Stream.mapEffect((line) => Queue.offer(eventQueue, new PlanTextOutput({ text: line }))),
+          Stream.mapEffect((line) =>
+            Effect.gen(function*() {
+              yield* Effect.logDebug("stderr line received").pipe(
+                Effect.annotateLogs({ line })
+              )
+              yield* Queue.offer(eventQueue, new PlanTextOutput({ text: line }))
+            })
+          ),
           Stream.runDrain,
           Effect.tapError((err) =>
             Queue.offer(eventQueue, new PlanFailed({ message: `stderr stream error: ${String(err)}` }))
@@ -216,6 +236,9 @@ export const PlanSessionLive = Layer.scoped(
 
         yield* Effect.gen(function*() {
           const exitCode = yield* process.exitCode
+          yield* Effect.log("Plan session process exited").pipe(
+            Effect.annotateLogs({ exitCode: String(exitCode) })
+          )
           yield* Ref.set(sessionRef, Option.none())
           yield* Scope.close(processScope, Exit.void)
           if (exitCode === 0) {
@@ -262,6 +285,11 @@ export const PlanSessionLive = Layer.scoped(
       Stream.mapError((err) => new PlanSessionError({ message: `Event stream error: ${String(err)}`, cause: err }))
     )
 
-    return PlanSession.of({ start, answer, isActive, events })
+    return PlanSession.of({
+      start: (planText) => start(planText).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      answer: (text) => answer(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      isActive,
+      events
+    })
   })
 )

@@ -5,7 +5,7 @@
 import { Command as CliCommand, Options, Prompt } from "@effect/cli"
 import { Command as PlatformCommand } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
-import { Console, Effect, Layer, Option, Stream } from "effect"
+import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
 import { AppRuntimeConfig, RuntimeConfig } from "./schemas/CredentialSchemas.js"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
 import { MainLayer, runEventLoop } from "./services/EventLoop.js"
@@ -107,9 +107,17 @@ const cli = CliCommand.run(lalphNotifyCommand, {
   version: "1.0.0"
 })
 
+const logLevelLayer = Layer.unwrapEffect(
+  Config.logLevel("LOG_LEVEL").pipe(
+    Config.withDefault(LogLevel.Info),
+    Effect.map(Logger.minimumLogLevel)
+  )
+)
+
 Effect.suspend(() => cli(process.argv)).pipe(
   Effect.provide(TelegramConfigLive),
   Effect.provide(AppContextLive),
   Effect.provide(NodeContext.layer),
+  Effect.provide(logLevelLayer),
   NodeRuntime.runMain
 )
