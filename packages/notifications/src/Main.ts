@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { Command as CliCommand, Options, Prompt } from "@effect/cli"
-import { Command as PlatformCommand } from "@effect/platform"
+import { Command as PlatformCommand, FileSystem, Path } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
@@ -63,9 +63,40 @@ const lalphNotifyCommand = CliCommand.make(
         PlanCommandBuilder,
         Effect.gen(function*() {
           const appContext = yield* AppContext
+          const fs = yield* FileSystem.FileSystem
+          const pathService = yield* Path.Path
+
+          // Resolve the real claude binary path
+          const realClaudePath = yield* PlatformCommand.make("which", "claude").pipe(
+            PlatformCommand.string,
+            Effect.map((s) => s.trim())
+          )
+          yield* Effect.log("Resolved real claude path").pipe(
+            Effect.annotateLogs({ realClaudePath })
+          )
+
+          // Create shim directory and script
+          const shimDir = pathService.join(appContext.configDir, "bin")
+          yield* fs.makeDirectory(shimDir, { recursive: true })
+
+          const shimPath = pathService.join(shimDir, "claude")
+          const shimScript = [
+            "#!/bin/bash",
+            `exec ${JSON.stringify(realClaudePath)} --output-format stream-json "$@"`
+          ].join("\n")
+          yield* fs.writeFileString(shimPath, shimScript)
+          yield* fs.chmod(shimPath, 0o755)
+          yield* Effect.log("Claude shim created").pipe(
+            Effect.annotateLogs({ shimPath })
+          )
+
+          const originalPath = process.env["PATH"] ?? ""
+          const shimmedPath = `${shimDir}:${originalPath}`
+
           return (tempFile: string) =>
             PlatformCommand.make("lalph", "plan", "--file", tempFile, "--dangerous").pipe(
               PlatformCommand.workingDirectory(appContext.projectRoot),
+              PlatformCommand.env({ PATH: shimmedPath }),
               PlatformCommand.stdout("pipe"),
               PlatformCommand.stderr("pipe"),
               PlatformCommand.stdin("pipe")
