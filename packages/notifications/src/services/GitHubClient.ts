@@ -119,19 +119,23 @@ export const GitHubClientLive = Layer.effect(
     const listOpenPRs = (repo: GitHubRepo) => {
       const { owner, repo: repoName } = splitFullName(repo.full_name)
       return octokit.listPulls({ owner, repo: repoName, state: "open", perPage: 100 }).pipe(
-        Effect.map((pulls) =>
-          Array.map(pulls, (raw) =>
-            new GitHubPullRequest({
-              id: raw.id,
-              number: raw.number,
-              title: raw.title,
-              state: raw.state,
-              html_url: raw.htmlUrl,
-              headRef: raw.head.ref,
-              headSha: raw.head.sha,
-              hasConflicts: false,
-              repo: repo.full_name
-            }))
+        Effect.flatMap((pulls) =>
+          Effect.forEach(pulls, (raw) =>
+            octokit.getPull({ owner, repo: repoName, pullNumber: raw.number }).pipe(
+              Effect.map((detail) =>
+                new GitHubPullRequest({
+                  id: raw.id,
+                  number: raw.number,
+                  title: raw.title,
+                  state: raw.state,
+                  html_url: raw.htmlUrl,
+                  headRef: raw.head.ref,
+                  headSha: raw.head.sha,
+                  hasConflicts: detail.mergeable === false,
+                  repo: repo.full_name
+                })
+              )
+            ))
         ),
         Effect.mapError((err) =>
           new GitHubClientError({

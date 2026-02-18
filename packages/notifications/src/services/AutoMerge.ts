@@ -45,8 +45,10 @@ const makeRepoFromFullName = (fullName: string) =>
   })
 
 const isCISuccess = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
+  if (checkRuns.length === 0) return state === "success"
+  const allChecksCompleted = Array.every(checkRuns, (cr) => cr.conclusion !== null)
   const allChecksPassed = Array.every(checkRuns, (cr) => cr.conclusion === "success" || cr.conclusion === "skipped")
-  return state === "success" && allChecksPassed
+  return allChecksCompleted && allChecksPassed && state !== "failure"
 }
 
 const isCIFailed = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
