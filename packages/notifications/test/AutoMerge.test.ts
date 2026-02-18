@@ -1,11 +1,21 @@
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import type { AutoMergeEvent } from "../src/Events.js"
 import { PRAutoMerged } from "../src/Events.js"
-import { GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
+import { GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge, AutoMergeLive } from "../src/services/AutoMerge.js"
 import type { GitHubClientService } from "../src/services/GitHubClient.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
+import { LalphConfig } from "../src/services/LalphConfig.js"
+
+const testRepo = new GitHubRepo({
+  id: 1,
+  name: "my-repo",
+  full_name: "owner/my-repo",
+  owner: { login: "owner" },
+  html_url: "https://github.com/owner/my-repo"
+})
 
 const makePR = (overrides: Partial<{
   id: number
@@ -33,17 +43,25 @@ const makeRuntimeConfig = (overrides: Partial<{
   autoMergeWaitMinutes: number
 }> = {}) =>
   new RuntimeConfig({
-    pollIntervalSeconds: 30,
+    pollIntervalSeconds: 0.001,
     triggerKeyword: "urgent",
     timerDelaySeconds: 300,
     autoMergeEnabled: overrides.autoMergeEnabled ?? true,
     autoMergeWaitMinutes: overrides.autoMergeWaitMinutes ?? 0
   })
 
+const makeLalphConfigMock = () =>
+  LalphConfig.of({
+    githubToken: Effect.succeed("test-token"),
+    linearToken: Effect.succeed("test-linear-token"),
+    issueSource: "github",
+    repoFullName: "owner/my-repo"
+  })
+
 const makeGitHubClientMock = (overrides: Partial<GitHubClientService> = {}): GitHubClientService =>
   GitHubClient.of({
     getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "bot" })),
-    listUserRepos: vi.fn(() => Effect.succeed([])),
+    listUserRepos: vi.fn(() => Effect.succeed([testRepo])),
     listOpenPRs: vi.fn(() => Effect.succeed([])),
     getPR: vi.fn(() => Effect.succeed(makePR())),
     postComment: vi.fn(() => Effect.succeed(undefined)),
@@ -60,30 +78,56 @@ const makeTestLayer = (
 ) =>
   AutoMergeLive.pipe(
     Layer.provide(Layer.succeed(GitHubClient, githubMock)),
-    Layer.provide(Layer.succeed(AppRuntimeConfig, runtimeConfig))
+    Layer.provide(Layer.succeed(AppRuntimeConfig, runtimeConfig)),
+    Layer.provide(Layer.succeed(LalphConfig, makeLalphConfigMock()))
   )
 
-describe("AutoMerge", () => {
-  it.effect("skips evaluation when auto-merge disabled", () => {
-    // Arrange
-    const githubMock = makeGitHubClientMock()
-    const config = makeRuntimeConfig({ autoMergeEnabled: false })
-
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([makePR()])
-
-      // Assert
-      expect(events).toHaveLength(0)
-      expect(githubMock.getCIStatus).not.toHaveBeenCalled()
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+const takeEvents = (n: number) =>
+  Effect.gen(function*() {
+    const autoMerge = yield* AutoMerge
+    return yield* autoMerge.eventStream.pipe(
+      Stream.take(n),
+      Stream.runCollect,
+      Effect.map(Chunk.toArray)
+    )
   })
 
-  it.effect("merges PR when CI passes and wait time elapsed", () => {
+const collectEventsFor = (ms: number) =>
+  Effect.gen(function*() {
+    const autoMerge = yield* AutoMerge
+    const collected = yield* Ref.make<Array<AutoMergeEvent>>([])
+    const fiber = yield* autoMerge.eventStream.pipe(
+      Stream.runForEach((event) => Ref.update(collected, (arr) => [...arr, event])),
+      Effect.fork
+    )
+    yield* Effect.sleep(Duration.millis(ms))
+    yield* Fiber.interrupt(fiber)
+    return yield* Ref.get(collected)
+  })
+
+describe("AutoMerge", () => {
+  it.live("skips evaluation when auto-merge disabled", () => {
     // Arrange
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()]))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: false })
+
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.getCIStatus).not.toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("merges PR when CI passes and wait time elapsed", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
@@ -94,23 +138,22 @@ describe("AutoMerge", () => {
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(1)
-      expect(events[0]).toBeInstanceOf(PRAutoMerged)
-      expect(githubMock.mergePR).toHaveBeenCalled()
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
   })
 
-  it.effect("does not merge when wait time not yet elapsed", () => {
+  it.live("does not merge when wait time not yet elapsed", () => {
     // Arrange
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
@@ -121,39 +164,39 @@ describe("AutoMerge", () => {
     // Wait 60 minutes — will never elapse in test
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 60 })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(0)
-      expect(githubMock.mergePR).not.toHaveBeenCalled()
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.mergePR).not.toHaveBeenCalled()
+      })
+    )
   })
 
-  it.effect("skips PRs with merge conflicts", () => {
-    // Arrange
-    const githubMock = makeGitHubClientMock()
-
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR({ hasConflicts: true })
-
-      // Act
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(0)
-      expect(githubMock.getCIStatus).not.toHaveBeenCalled()
-    }).pipe(Effect.provide(makeTestLayer(githubMock)))
-  })
-
-  it.effect("skips already-merged PRs", () => {
+  it.live("skips PRs with merge conflicts", () => {
     // Arrange
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR({ hasConflicts: true })]))
+    })
+
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.getCIStatus).not.toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("skips already-merged PRs", () => {
+    // Arrange
+    const pr = makePR()
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([pr])),
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
@@ -164,23 +207,22 @@ describe("AutoMerge", () => {
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-      yield* autoMerge.evaluatePRs([pr])
-
-      // Act — second evaluation should skip already-merged PR
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(0)
-      expect(githubMock.mergePR).toHaveBeenCalledTimes(1)
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+    // Act — take 1 event (the first merge), then collect for a while to confirm no second merge
+    return takeEvents(1).pipe(
+      Effect.flatMap(() => collectEventsFor(50)),
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.mergePR).toHaveBeenCalledTimes(1)
+      })
+    )
   })
 
-  it.effect("handles merge API failure gracefully", () => {
+  it.live("handles merge API failure gracefully", () => {
     // Arrange
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
@@ -191,63 +233,67 @@ describe("AutoMerge", () => {
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-
-      // Act — merge fails but should not throw
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert — no events emitted since merge failed
-      expect(events).toHaveLength(0)
-      expect(githubMock.mergePR).toHaveBeenCalled()
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+    // Act — merge fails but should not throw
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert — no events emitted since merge failed
+        expect(events).toHaveLength(0)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
   })
 
-  it.effect("handles CI status fetch failure gracefully", () => {
+  it.live("handles CI status fetch failure gracefully", () => {
     // Arrange
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
       getCIStatus: vi.fn(() => Effect.fail(new GitHubClientError({ message: "API rate limited", cause: null })))
     })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR()
-
-      // Act — CI status fetch fails but should not throw
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert
-      expect(events).toHaveLength(0)
-    }).pipe(Effect.provide(makeTestLayer(githubMock)))
+    // Act — CI status fetch fails but should not throw
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+      })
+    )
   })
 
-  it.effect("cleans up state for PRs no longer open", () => {
+  it.live("cleans up state for PRs no longer open", () => {
     // Arrange
+    let callCount = 0
+    const pr = makePR({ number: 1 })
     const getCIStatusMock = vi.fn<GitHubClientService["getCIStatus"]>()
       .mockReturnValueOnce(Effect.succeed({ state: "pending", checkRuns: [] }))
-      .mockReturnValue(Effect.succeed({
+      .mockReturnValueOnce(Effect.succeed({
         state: "success",
         checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
       }))
     const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => {
+        callCount++
+        // Cycle 1: PR present (CI pending)
+        if (callCount === 1) return Effect.succeed([pr])
+        // Cycle 2: PR gone (state cleaned up)
+        if (callCount === 2) return Effect.succeed([])
+        // Cycle 3+: PR returns (should be treated as new, CI success)
+        return Effect.succeed([pr])
+      }),
       getCIStatus: getCIStatusMock,
       mergePR: vi.fn(() => Effect.succeed(undefined))
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
 
-    return Effect.gen(function*() {
-      const autoMerge = yield* AutoMerge
-      const pr = makePR({ number: 1 })
-      yield* autoMerge.evaluatePRs([pr])
-      yield* autoMerge.evaluatePRs([])
-
-      // Act — evaluate with same PR number after state was cleaned up
-      const events = yield* autoMerge.evaluatePRs([pr])
-
-      // Assert — PR should be treated as new (no stale state)
-      expect(events).toHaveLength(1)
-      expect(events[0]).toBeInstanceOf(PRAutoMerged)
-    }).pipe(Effect.provide(makeTestLayer(githubMock, config)))
+    // Act — PR disappears and reappears; state should be cleaned up
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert — PR should be treated as new (no stale state)
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+      })
+    )
   })
 })

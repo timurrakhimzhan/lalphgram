@@ -9,11 +9,12 @@ import {
   TaskCreated,
   TaskUpdated
 } from "../src/Events.js"
-import type { PullRequestEvent, TaskTrackerEvent } from "../src/Events.js"
+import type { AutoMergeEvent, PullRequestEvent, TaskTrackerEvent } from "../src/Events.js"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
+import { AutoMerge } from "../src/services/AutoMerge.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
 import { PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
@@ -66,14 +67,21 @@ const makeComment = () =>
     repo: "owner/repo"
   })
 
+const makeAutoMergeMock = (autoMergeEvents: ReadonlyArray<AutoMergeEvent> = []) =>
+  AutoMerge.of({
+    eventStream: Stream.fromIterable(autoMergeEvents)
+  })
+
 const makeEventSourcesFromEvents = (
   prEvents: ReadonlyArray<PullRequestEvent>,
-  taskEvents: ReadonlyArray<TaskTrackerEvent> = []
+  taskEvents: ReadonlyArray<TaskTrackerEvent> = [],
+  autoMergeEvents: ReadonlyArray<AutoMergeEvent> = []
 ) => ({
   githubEventSourceMock: PullRequestTracker.of({
-    stream: Stream.fromIterable(prEvents)
+    eventStream: Stream.fromIterable(prEvents)
   }),
-  taskEvents
+  taskEvents,
+  autoMergeMock: makeAutoMergeMock(autoMergeEvents)
 })
 
 const makeMessengerMock = (incomingMessages?: Stream.Stream<IncomingMessage>) =>
@@ -96,7 +104,7 @@ const makeGitHubClientMock = () =>
   })
 
 const makeTrackerMock = (): TaskTrackerService => ({
-  events: Stream.empty,
+  eventStream: Stream.empty,
   moveToTodo: vi.fn(() => Effect.succeed(undefined)),
   setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
   getIssue: vi.fn(() => Effect.succeed(makeIssue()))
@@ -125,15 +133,20 @@ const makeTestLayer = (
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
     taskEvents?: ReadonlyArray<TaskTrackerEvent>
+    autoMergeEvents?: ReadonlyArray<AutoMergeEvent>
   } = {}
 ) => {
-  const { githubEventSourceMock, taskEvents } = makeEventSourcesFromEvents(prEvents, overrides.taskEvents)
+  const { autoMergeMock, githubEventSourceMock, taskEvents } = makeEventSourcesFromEvents(
+    prEvents,
+    overrides.taskEvents,
+    overrides.autoMergeEvents
+  )
   const messengerMock = overrides.messengerMock ?? makeMessengerMock()
   const githubClientMock = overrides.githubClientMock ?? makeGitHubClientMock()
   const baseTrackerMock = overrides.trackerMock ?? makeTrackerMock()
   const trackerMock: TaskTrackerService = {
     ...baseTrackerMock,
-    events: taskEvents.length > 0 ? Stream.fromIterable(taskEvents) : baseTrackerMock.events
+    eventStream: taskEvents.length > 0 ? Stream.fromIterable(taskEvents) : baseTrackerMock.eventStream
   }
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
@@ -141,6 +154,7 @@ const makeTestLayer = (
   return {
     layer: Layer.mergeAll(
       Layer.succeed(PullRequestTracker, githubEventSourceMock),
+      Layer.succeed(AutoMerge, autoMergeMock),
       Layer.succeed(MessengerAdapter, messengerMock),
       Layer.succeed(GitHubClient, githubClientMock),
       Layer.succeed(TaskTracker, trackerMock),
@@ -262,7 +276,7 @@ describe("event loop dispatch", () => {
     const pr = makePR()
     const event = new PRAutoMerged({ pr })
     const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([event], { messengerMock })
+    const { layer } = makeTestLayer([], { messengerMock, autoMergeEvents: [event] })
 
     // Act
     return Effect.gen(function*() {
@@ -360,7 +374,7 @@ describe("event loop dispatch", () => {
       }),
       incomingMessages: Stream.empty
     })
-    const { layer } = makeTestLayer([event1, event2], { messengerMock })
+    const { layer } = makeTestLayer([event1], { messengerMock, autoMergeEvents: [event2] })
 
     // Act & Assert
     return Effect.gen(function*() {

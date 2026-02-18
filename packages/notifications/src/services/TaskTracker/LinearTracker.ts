@@ -103,7 +103,7 @@ export const LinearTrackerLive = Layer.effect(
     )
 
     return TaskTracker.of({
-      events: eventStream,
+      eventStream,
 
       moveToTodo: (issueId) =>
         Effect.gen(function*() {

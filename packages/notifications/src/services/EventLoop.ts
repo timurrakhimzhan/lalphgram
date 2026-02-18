@@ -6,7 +6,7 @@ import { Console, Effect, Layer, Match, Option, Ref, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
-import { AutoMergeLive } from "./AutoMerge.js"
+import { AutoMerge, AutoMergeLive } from "./AutoMerge.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
@@ -50,11 +50,11 @@ const servicesLayer = Layer.mergeAll(
 )
 
 const autoMergeLayer = AutoMergeLive.pipe(
-  Layer.provide(servicesLayer)
+  Layer.provide(servicesLayer),
+  Layer.provide(lalphConfigLayer)
 )
 
 const eventSourcesLayer = PullRequestTrackerLive.pipe(
-  Layer.provide(autoMergeLayer),
   Layer.provide(servicesLayer),
   Layer.provide(lalphConfigLayer)
 )
@@ -80,6 +80,7 @@ export const MainLayer = Layer.mergeAll(
   lalphConfigLayer,
   servicesLayer,
   eventSourcesLayer,
+  autoMergeLayer,
   commentTimerLayer,
   branchParserLayer,
   planSessionLayer
@@ -94,11 +95,12 @@ export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
 
 export const runEventLoop = Effect.gen(function*() {
-  const githubEvents = yield* PullRequestTracker
+  const pullRequestTracker = yield* PullRequestTracker
+  const autoMerge = yield* AutoMerge
   const notifier = yield* MessengerAdapter
   const github = yield* GitHubClient
   const timer = yield* CommentTimer
-  const tracker = yield* TaskTracker
+  const taskTracker = yield* TaskTracker
   const branchParser = yield* BranchParser
   const planSession = yield* PlanSession
 
@@ -131,7 +133,7 @@ export const runEventLoop = Effect.gen(function*() {
           const issueIdOption = branchParser.resolveIssueId(e.pr)
           if (Option.isSome(issueIdOption)) {
             const issueId = issueIdOption.value
-            yield* tracker.moveToTodo(issueId).pipe(
+            yield* taskTracker.moveToTodo(issueId).pipe(
               Effect.tapError((err) =>
                 Effect.logError(`Failed to move to todo: ${err.message}`)
               ),
@@ -139,7 +141,7 @@ export const runEventLoop = Effect.gen(function*() {
                 undefined
               )
             )
-            yield* tracker.setPriorityUrgent(issueId).pipe(
+            yield* taskTracker.setPriorityUrgent(issueId).pipe(
               Effect.tapError((err) => Effect.logError(`Failed to set priority: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
             )
@@ -166,11 +168,11 @@ export const runEventLoop = Effect.gen(function*() {
           const issueIdOption = branchParser.resolveIssueId(e.pr)
           if (Option.isSome(issueIdOption)) {
             const issueId = issueIdOption.value
-            yield* tracker.moveToTodo(issueId).pipe(
+            yield* taskTracker.moveToTodo(issueId).pipe(
               Effect.tapError((err) => Effect.logError(`Failed to move to todo: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
             )
-            yield* tracker.setPriorityUrgent(issueId).pipe(
+            yield* taskTracker.setPriorityUrgent(issueId).pipe(
               Effect.tapError((err) => Effect.logError(`Failed to set priority: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
             )
@@ -266,8 +268,11 @@ export const runEventLoop = Effect.gen(function*() {
   )
 
   const mergedStream = Stream.merge(
-    githubEvents.stream,
-    tracker.events
+    Stream.merge(
+      pullRequestTracker.eventStream.pipe(Stream.map((e): AppEvent => e)),
+      autoMerge.eventStream.pipe(Stream.map((e): AppEvent => e))
+    ),
+    taskTracker.eventStream.pipe(Stream.map((e): AppEvent => e))
   )
 
   yield* notifier.sendMessage({

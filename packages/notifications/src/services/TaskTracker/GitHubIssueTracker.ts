@@ -104,7 +104,7 @@ export const GitHubIssueTrackerLive = Layer.effect(
     )
 
     return TaskTracker.of({
-      events: eventStream,
+      eventStream,
 
       moveToTodo: (issueId) =>
         Effect.gen(function*() {

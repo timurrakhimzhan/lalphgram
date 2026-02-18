@@ -21,7 +21,7 @@ export class TaskTrackerError extends Data.TaggedError("TaskTrackerError")<{
  * @category services
  */
 export interface TaskTrackerService {
-  readonly events: Stream.Stream<TaskTrackerEvent, TaskTrackerError>
+  readonly eventStream: Stream.Stream<TaskTrackerEvent, TaskTrackerError>
   readonly moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly setPriorityUrgent: (issueId: string) => Effect.Effect<void, TaskTrackerError>
   readonly getIssue: (issueId: string) => Effect.Effect<TrackerIssue, TaskTrackerError>

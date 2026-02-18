@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
-import type { AutoMergeEvent, PullRequestEvent } from "../src/Events.js"
-import { PRAutoMerged, PRCIFailed } from "../src/Events.js"
+import type { PullRequestEvent } from "../src/Events.js"
+import { PRCIFailed } from "../src/Events.js"
 import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
-import { AutoMerge } from "../src/services/AutoMerge.js"
 import { GitHubClient, GitHubClientError } from "../src/services/GitHubClient.js"
 import { LalphConfig } from "../src/services/LalphConfig.js"
 import { PullRequestTracker, PullRequestTrackerLive } from "../src/services/PullRequestTracker.js"
@@ -113,22 +112,11 @@ const makeGitHubClientMock = (overrides: Partial<{
     mergePR: vi.fn(() => Effect.succeed(undefined))
   })
 
-const makeAutoMergeMock = (overrides: Partial<{
-  evaluatePRs: (
-    prs: ReadonlyArray<GitHubPullRequest>
-  ) => Effect.Effect<ReadonlyArray<AutoMergeEvent>, never>
-}> = {}) =>
-  AutoMerge.of({
-    evaluatePRs: overrides.evaluatePRs ?? vi.fn(() => Effect.succeed([]))
-  })
-
 const makeTestLayer = (
   mock: ReturnType<typeof makeGitHubClientMock>,
-  repoFullName: string = "owner/my-repo",
-  autoMergeMock: ReturnType<typeof makeAutoMergeMock> = makeAutoMergeMock()
+  repoFullName: string = "owner/my-repo"
 ) =>
   PullRequestTrackerLive.pipe(
-    Layer.provide(Layer.succeed(AutoMerge, autoMergeMock)),
     Layer.provide(Layer.succeed(GitHubClient, mock)),
     Layer.provide(runtimeConfigLayer),
     Layer.provide(Layer.succeed(LalphConfig, makeLalphConfigMock(repoFullName)))
@@ -137,7 +125,7 @@ const makeTestLayer = (
 const takeEvents = (n: number) =>
   Effect.gen(function*() {
     const source = yield* PullRequestTracker
-    return yield* source.stream.pipe(
+    return yield* source.eventStream.pipe(
       Stream.take(n),
       Stream.runCollect,
       Effect.map(Chunk.toArray)
@@ -148,7 +136,7 @@ const collectEventsFor = (ms: number) =>
   Effect.gen(function*() {
     const source = yield* PullRequestTracker
     const collected = yield* Ref.make<Array<PullRequestEvent>>([])
-    const fiber = yield* source.stream.pipe(
+    const fiber = yield* source.eventStream.pipe(
       Stream.runForEach((event) => Ref.update(collected, (arr) => [...arr, event])),
       Effect.fork
     )
@@ -411,33 +399,6 @@ describe("PullRequestTracker", () => {
         expect(mock.listOpenPRs).not.toHaveBeenCalledWith(
           expect.objectContaining({ full_name: "owner/other-repo" })
         )
-      })
-    )
-  })
-
-  it.live("includes auto-merge events in poll cycle output", () => {
-    // Arrange
-    const pr = makePR({ id: 100 })
-    const mock = makeGitHubClientMock({
-      listOpenPRs: vi.fn(() => Effect.succeed([pr]))
-    })
-    const autoMergeMock = makeAutoMergeMock({
-      evaluatePRs: vi.fn((prs: ReadonlyArray<GitHubPullRequest>) =>
-        Effect.succeed(prs.map((p) => new PRAutoMerged({ pr: p })))
-      )
-    })
-
-    // Act
-    return takeEvents(1).pipe(
-      Effect.provide(makeTestLayer(mock, "owner/my-repo", autoMergeMock)),
-      Effect.map((events) => {
-        // Assert
-        const autoMergeEvents = events.filter((e) => e._tag === "PRAutoMerged")
-        expect(autoMergeEvents).toHaveLength(1)
-        expect(getPRFromEvent(autoMergeEvents[0])?.id).toBe(100)
-        expect(autoMergeMock.evaluatePRs).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 100 })
-        ])
       })
     )
   })

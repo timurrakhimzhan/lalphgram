@@ -50,7 +50,7 @@ const makeComment = (overrides: Partial<{
 const makeTrackerMock = (overrides: Partial<{
   moveToTodo: (issueId: string) => Effect.Effect<void, TaskTrackerError>
 }> = {}): TaskTrackerService => ({
-  events: Stream.empty,
+  eventStream: Stream.empty,
   moveToTodo: overrides.moveToTodo ?? vi.fn(() => Effect.succeed(undefined)),
   setPriorityUrgent: vi.fn(() => Effect.succeed(undefined)),
   getIssue: vi.fn(() =>

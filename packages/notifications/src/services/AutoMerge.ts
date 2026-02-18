@@ -2,13 +2,14 @@
  * Auto-merge service that evaluates open PRs for automatic merging
  * @since 1.0.0
  */
-import { Array, Context, Data, Effect, HashMap, HashSet, Layer, Option, Ref } from "effect"
+import { Array, Context, Data, Duration, Effect, HashMap, HashSet, Layer, Option, Ref, Schedule, Stream } from "effect"
 import { PRAutoMerged } from "../Events.js"
 import type { AutoMergeEvent } from "../Events.js"
 import type { GitHubPullRequest } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
 import { GitHubClient } from "./GitHubClient.js"
+import { LalphConfig } from "./LalphConfig.js"
 
 /**
  * @since 1.0.0
@@ -24,9 +25,7 @@ export class AutoMergeError extends Data.TaggedError("AutoMergeError")<{
  * @category services
  */
 export interface AutoMergeService {
-  readonly evaluatePRs: (
-    prs: ReadonlyArray<GitHubPullRequest>
-  ) => Effect.Effect<ReadonlyArray<AutoMergeEvent>, AutoMergeError>
+  readonly eventStream: Stream.Stream<AutoMergeEvent, AutoMergeError>
 }
 
 /**
@@ -59,7 +58,9 @@ export const AutoMergeLive = Layer.effect(
   AutoMerge,
   Effect.gen(function*() {
     const config = yield* AppRuntimeConfig
+    const lalphConfig = yield* LalphConfig
     const github = yield* GitHubClient
+    const interval = Duration.seconds(config.pollIntervalSeconds)
 
     // headShaTimestamps: tracks when we first saw each PR's current head SHA (PR number -> { sha, timestamp })
     const headShaTimestampsRef = yield* Ref.make(HashMap.empty<number, { sha: string; timestamp: number }>())
@@ -161,6 +162,37 @@ export const AutoMergeLive = Layer.effect(
         return events
       })
 
-    return AutoMerge.of({ evaluatePRs })
+    const pollCycle = Effect.gen(function*() {
+      const allRepos = yield* github.listUserRepos().pipe(
+        Effect.mapError((err) => new AutoMergeError({ message: `Failed to list repos: ${String(err)}`, cause: err }))
+      )
+
+      const repos = allRepos.filter((repo) => repo.full_name === lalphConfig.repoFullName)
+
+      const allPRs = yield* Effect.forEach(repos, (repo) =>
+        github.listOpenPRs(repo).pipe(
+          Effect.mapError((err) =>
+            new AutoMergeError({ message: `Failed to list PRs for ${repo.full_name}: ${String(err)}`, cause: err })
+          )
+        )).pipe(Effect.map(Array.flatten))
+
+      return yield* evaluatePRs(allPRs)
+    })
+
+    const emptyBatch: Array<AutoMergeEvent> = []
+
+    const safePollCycle = pollCycle.pipe(
+      Effect.tapError((err) => Effect.logError(`AutoMerge poll cycle failed: ${err.message}`)),
+      Effect.orElseSucceed(() => emptyBatch)
+    )
+
+    const eventStream = Stream.repeatEffectWithSchedule(
+      safePollCycle,
+      Schedule.spaced(interval)
+    ).pipe(
+      Stream.flatMap((batch) => Stream.fromIterable(batch))
+    )
+
+    return AutoMerge.of({ eventStream })
   })
 )

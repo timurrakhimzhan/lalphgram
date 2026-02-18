@@ -4,11 +4,10 @@
  */
 import { Array, Context, Data, Duration, Effect, HashMap, HashSet, Layer, Option, Ref, Schedule, Stream } from "effect"
 import { PRCIFailed, PRCommentAdded, PRConflictDetected, PROpened } from "../Events.js"
-import type { AutoMergeEvent, PullRequestEvent } from "../Events.js"
+import type { PullRequestEvent } from "../Events.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo as GitHubRepoClass } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
-import { AutoMerge } from "./AutoMerge.js"
 import { GitHubClient } from "./GitHubClient.js"
 import { LalphConfig } from "./LalphConfig.js"
 
@@ -26,7 +25,7 @@ export class PullRequestTrackerError extends Data.TaggedError("PullRequestTracke
  * @category services
  */
 export interface PullRequestTrackerService {
-  readonly stream: Stream.Stream<PullRequestEvent, PullRequestTrackerError>
+  readonly eventStream: Stream.Stream<PullRequestEvent, PullRequestTrackerError>
 }
 
 /**
@@ -70,7 +69,6 @@ export const PullRequestTrackerLive = Layer.effect(
     const config = yield* AppRuntimeConfig
     const lalphConfig = yield* LalphConfig
     const github = yield* GitHubClient
-    const autoMerge = yield* AutoMerge
     const interval = Duration.seconds(config.pollIntervalSeconds)
 
     const authenticatedUser = yield* github.getAuthenticatedUser().pipe(
@@ -217,16 +215,6 @@ export const PullRequestTrackerLive = Layer.effect(
         }
       }
 
-      // Evaluate auto-merge for all open PRs
-      const allPRs = allPRsWithRepos.map(({ pr }) => pr)
-      const autoMergeEvents = yield* autoMerge.evaluatePRs(allPRs).pipe(
-        Effect.tapError((err) => Effect.logError(`AutoMerge evaluation failed: ${err.message}`)),
-        Effect.orElseSucceed(() => [] satisfies ReadonlyArray<AutoMergeEvent>)
-      )
-      for (const event of autoMergeEvents) {
-        events.push(event)
-      }
-
       // Update state
       yield* Ref.set(knownPRsRef, currentPRIds)
 
@@ -260,6 +248,6 @@ export const PullRequestTrackerLive = Layer.effect(
       Stream.flatMap((batch) => Stream.fromIterable(batch))
     )
 
-    return PullRequestTracker.of({ stream: eventStream })
+    return PullRequestTracker.of({ eventStream })
   })
 )

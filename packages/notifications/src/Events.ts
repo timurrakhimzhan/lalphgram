@@ -84,7 +84,6 @@ export type PullRequestEvent =
   | PRConflictDetected
   | PRCommentAdded
   | PRCIFailed
-  | AutoMergeEvent
 
 /**
  * @since 1.0.0
@@ -96,4 +95,4 @@ export type TaskTrackerEvent = TaskCreated | TaskUpdated
  * @since 1.0.0
  * @category events
  */
-export type AppEvent = PullRequestEvent | TaskTrackerEvent
+export type AppEvent = PullRequestEvent | AutoMergeEvent | TaskTrackerEvent
