@@ -31,17 +31,17 @@ export * from "./lib/BranchParser.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/TaskTracker.js"
+export * from "./services/TaskTracker/TaskTracker.js"
 
 /**
  * @since 1.0.0
  */
-export * from "./services/LinearTracker.js"
+export * from "./services/TaskTracker/LinearTracker.js"
 
 /**
  * @since 1.0.0
  */
-export * from "./services/GitHubIssueTracker.js"
+export * from "./services/TaskTracker/GitHubIssueTracker.js"
 
 /**
  * @since 1.0.0
@@ -81,12 +81,12 @@ export * from "./services/CommentTimer.js"
 /**
  * @since 1.0.0
  */
-export * from "./services/MessengerAdapter.js"
+export * from "./services/MessengerAdapter/MessengerAdapter.js"
 
 /**
  * @since 1.0.0
  */
-export * from "./services/TelegramAdapter.js"
+export * from "./services/MessengerAdapter/TelegramAdapter.js"
 
 /**
  * @since 1.0.0

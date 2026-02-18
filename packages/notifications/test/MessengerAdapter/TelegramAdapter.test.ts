@@ -1,9 +1,13 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Stream } from "effect"
 import { beforeEach, vi } from "vitest"
-import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
-import { TelegramAdapterLive } from "../src/services/TelegramAdapter.js"
-import { TelegramConfig, TelegramConfigSchema } from "../src/services/TelegramConfig.js"
+import {
+  IncomingMessage,
+  MessengerAdapter,
+  MessengerAdapterError
+} from "../../src/services/MessengerAdapter/MessengerAdapter.js"
+import { TelegramAdapterLive } from "../../src/services/MessengerAdapter/TelegramAdapter.js"
+import { TelegramConfig, TelegramConfigSchema } from "../../src/services/TelegramConfig.js"
 
 const sendMessageMock = vi.fn().mockResolvedValue({ message_id: 1 })
 const launchMock = vi.fn().mockResolvedValue(undefined)

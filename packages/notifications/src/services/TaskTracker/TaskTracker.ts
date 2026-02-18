@@ -4,7 +4,7 @@
  */
 import type { Effect } from "effect"
 import { Context, Data } from "effect"
-import type { TrackerIssue, TrackerIssueEvent } from "../schemas/TrackerSchemas.js"
+import type { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
 
 /**
  * @since 1.0.0

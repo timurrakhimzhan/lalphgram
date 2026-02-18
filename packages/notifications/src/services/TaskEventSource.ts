@@ -2,7 +2,7 @@ import { Context, Data, DateTime, Duration, Effect, HashMap, Layer, Option, Ref,
 import { TaskCreated, TaskUpdated } from "../Events.js"
 import type { AppEvent } from "../Events.js"
 import { AppRuntimeConfig } from "../schemas/CredentialSchemas.js"
-import { TaskTracker } from "./TaskTracker.js"
+import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 
 export class TaskEventSourceError extends Data.TaggedError("TaskEventSourceError")<{
   message: string

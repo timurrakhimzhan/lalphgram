@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { GitHubIssueTrackerLive } from "../src/services/GitHubIssueTracker.js"
-import type { LinearSdkClientService } from "../src/services/LinearSdkClient.js"
-import { LinearSdkClient, LinearSdkClientError } from "../src/services/LinearSdkClient.js"
-import { LinearTrackerLive } from "../src/services/LinearTracker.js"
-import type { OctokitClientService } from "../src/services/OctokitClient.js"
-import { OctokitClient, OctokitClientError } from "../src/services/OctokitClient.js"
-import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
+import type { LinearSdkClientService } from "../../src/services/LinearSdkClient.js"
+import { LinearSdkClient, LinearSdkClientError } from "../../src/services/LinearSdkClient.js"
+import type { OctokitClientService } from "../../src/services/OctokitClient.js"
+import { OctokitClient, OctokitClientError } from "../../src/services/OctokitClient.js"
+import { GitHubIssueTrackerLive } from "../../src/services/TaskTracker/GitHubIssueTracker.js"
+import { LinearTrackerLive } from "../../src/services/TaskTracker/LinearTracker.js"
+import { TaskTracker, TaskTrackerError } from "../../src/services/TaskTracker/TaskTracker.js"
 
 const makeLinearSdkMock = (overrides: Partial<LinearSdkClientService> = {}): LinearSdkClientService =>
   LinearSdkClient.of({

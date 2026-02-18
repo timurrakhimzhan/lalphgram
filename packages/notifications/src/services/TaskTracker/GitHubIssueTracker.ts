@@ -3,8 +3,8 @@
  * @since 1.0.0
  */
 import { Array, Effect, Layer } from "effect"
-import { TrackerIssue, TrackerIssueEvent } from "../schemas/TrackerSchemas.js"
-import { OctokitClient } from "./OctokitClient.js"
+import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
+import { OctokitClient } from "../OctokitClient.js"
 import { TaskTracker, TaskTrackerError } from "./TaskTracker.js"
 
 const extractRepoFullName = (repositoryUrl: string): string => {

@@ -4,8 +4,8 @@
  */
 import { Effect, Layer, Option, Queue, Ref, Stream } from "effect"
 import { Markup, Telegraf } from "telegraf"
+import { TelegramConfig } from "../TelegramConfig.js"
 import { IncomingMessage, MessengerAdapter, MessengerAdapterError, type OutgoingMessage } from "./MessengerAdapter.js"
-import { TelegramConfig } from "./TelegramConfig.js"
 
 /**
  * @since 1.0.0

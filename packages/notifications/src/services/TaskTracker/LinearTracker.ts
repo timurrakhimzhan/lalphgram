@@ -3,8 +3,8 @@
  * @since 1.0.0
  */
 import { Effect, Layer, Ref } from "effect"
-import { TrackerIssue, TrackerIssueEvent } from "../schemas/TrackerSchemas.js"
-import { LinearSdkClient } from "./LinearSdkClient.js"
+import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
+import { LinearSdkClient } from "../LinearSdkClient.js"
 import { TaskTracker, TaskTrackerError } from "./TaskTracker.js"
 
 export const LinearTrackerLive = Layer.effect(

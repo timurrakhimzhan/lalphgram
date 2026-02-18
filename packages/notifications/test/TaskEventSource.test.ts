@@ -4,8 +4,8 @@ import type { AppEvent } from "../src/Events.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { TrackerIssue, TrackerIssueEvent } from "../src/schemas/TrackerSchemas.js"
 import { TaskEventSource, TaskEventSourceLive } from "../src/services/TaskEventSource.js"
-import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
-import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker/TaskTracker.js"
+import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
 const runtimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 0.001,

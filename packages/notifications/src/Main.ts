@@ -10,7 +10,7 @@ import { AppRuntimeConfig, RuntimeConfig } from "./schemas/CredentialSchemas.js"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
 import { MainLayer, runEventLoop } from "./services/EventLoop.js"
 import { LalphConfig } from "./services/LalphConfig.js"
-import { MessengerAdapter } from "./services/MessengerAdapter.js"
+import { MessengerAdapter } from "./services/MessengerAdapter/MessengerAdapter.js"
 import { PlanCommandBuilder } from "./services/PlanSession.js"
 import { TelegramConfig, TelegramConfigLive, TelegramConfigSchema } from "./services/TelegramConfig.js"
 

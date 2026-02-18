@@ -19,12 +19,16 @@ import { PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
 import { GitHubEventSource } from "../src/services/GitHubEventSource.js"
 import type { GitHubEventSourceError } from "../src/services/GitHubEventSource.js"
-import { IncomingMessage, MessengerAdapter, MessengerAdapterError } from "../src/services/MessengerAdapter.js"
+import {
+  IncomingMessage,
+  MessengerAdapter,
+  MessengerAdapterError
+} from "../src/services/MessengerAdapter/MessengerAdapter.js"
 import { PlanSession } from "../src/services/PlanSession.js"
 import { TaskEventSource } from "../src/services/TaskEventSource.js"
 import type { TaskEventSourceError } from "../src/services/TaskEventSource.js"
-import { TaskTracker } from "../src/services/TaskTracker.js"
-import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
+import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
 const testRuntimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,

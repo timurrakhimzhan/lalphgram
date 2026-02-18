@@ -4,10 +4,10 @@ import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/schemas/CredentialSchemas.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
 import { CommentTimer, CommentTimerLive } from "../src/services/CommentTimer.js"
-import type { MessengerAdapterError, OutgoingMessage } from "../src/services/MessengerAdapter.js"
-import { MessengerAdapter } from "../src/services/MessengerAdapter.js"
-import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker.js"
-import type { TaskTrackerService } from "../src/services/TaskTracker.js"
+import type { MessengerAdapterError, OutgoingMessage } from "../src/services/MessengerAdapter/MessengerAdapter.js"
+import { MessengerAdapter } from "../src/services/MessengerAdapter/MessengerAdapter.js"
+import { TaskTracker, TaskTrackerError } from "../src/services/TaskTracker/TaskTracker.js"
+import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
 const runtimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,
