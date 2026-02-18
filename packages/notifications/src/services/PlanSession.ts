@@ -4,7 +4,7 @@
  */
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
 import { Context, Data, Effect, Exit, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
-import { AskUserQuestionInput, parseNdjsonMessages } from "../lib/StreamJsonParser.js"
+import { AskUserQuestionInput, StreamJsonMessage } from "../lib/StreamJsonParser.js"
 import { AppContext } from "./AppContext.js"
 
 /**
@@ -99,6 +99,7 @@ const stripAnsi = (text: string): string =>
   text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
 
 const decodeAskInput = Schema.decodeUnknown(AskUserQuestionInput)
+const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
 
 /**
  * @since 1.0.0
@@ -170,26 +171,56 @@ export const PlanSessionLive = Layer.scoped(
 
         yield* process.stdout.pipe(
           Stream.map((chunk) => decoder.decode(chunk)),
-          parseNdjsonMessages,
-          Stream.mapEffect((msg) =>
+          Stream.tap((chunk) =>
+            Effect.log("stdout chunk received").pipe(
+              Effect.annotateLogs({ chunkLength: String(chunk.length), preview: chunk.slice(0, 200) })
+            )
+          ),
+          Stream.splitLines,
+          Stream.filter((line) => line.trim().length > 0),
+          Stream.mapEffect((line) =>
             Effect.gen(function*() {
-              yield* Effect.logDebug("Received stream message").pipe(
+              const parsed = yield* decodeJsonMessage(line).pipe(
+                Effect.map(Option.some),
+                Effect.catchTag("ParseError", (err) =>
+                  Effect.logWarning("stdout line is not valid JSON, treating as raw text").pipe(
+                    Effect.annotateLogs({ parseError: err.message.slice(0, 100) }),
+                    Effect.map(() => Option.none<StreamJsonMessage>())
+                  ))
+              )
+              if (Option.isNone(parsed)) {
+                const cleaned = stripAnsi(line).trim()
+                if (cleaned.length > 0) {
+                  yield* Effect.log("stdout raw line (not JSON)").pipe(
+                    Effect.annotateLogs({ line: cleaned.slice(0, 200) })
+                  )
+                  yield* Queue.offer(eventQueue, new PlanTextOutput({ text: cleaned }))
+                }
+                return
+              }
+              const msg = parsed.value
+              yield* Effect.log("Parsed stream-json message").pipe(
                 Effect.annotateLogs({
                   messageType: msg.type,
                   ...(msg.subtype != null ? { subtype: msg.subtype } : {})
                 })
               )
-              if (msg.type !== "assistant" || msg.message?.content == null) return
+              if (msg.type !== "assistant" || msg.message?.content == null) {
+                return
+              }
               for (const block of msg.message.content) {
                 if (block.type === "text" && block.text != null) {
+                  yield* Effect.log("Emitting text block").pipe(
+                    Effect.annotateLogs({ textLength: String(block.text.length) })
+                  )
                   yield* Queue.offer(eventQueue, new PlanTextOutput({ text: block.text }))
                 } else if (block.type === "tool_use" && block.name === "AskUserQuestion") {
                   yield* Effect.log("AskUserQuestion detected")
-                  const parsed = yield* decodeAskInput(block.input).pipe(
+                  const askParsed = yield* decodeAskInput(block.input).pipe(
                     Effect.orElseSucceed(() => ({ questions: undefined }))
                   )
-                  if (parsed.questions != null && parsed.questions.length > 0) {
-                    yield* Queue.offer(eventQueue, new PlanQuestion({ questions: parsed.questions }))
+                  if (askParsed.questions != null && askParsed.questions.length > 0) {
+                    yield* Queue.offer(eventQueue, new PlanQuestion({ questions: askParsed.questions }))
                   }
                 } else if (block.type === "tool_use" && block.name != null) {
                   yield* Effect.log("Tool invoked").pipe(
@@ -204,6 +235,9 @@ export const PlanSessionLive = Layer.scoped(
             })
           ),
           Stream.runDrain,
+          Effect.tap(() =>
+            Effect.log("stdout stream completed")
+          ),
           Effect.tapError((err) =>
             Queue.offer(eventQueue, new PlanFailed({ message: `stdout stream error: ${String(err)}` }))
           ),
@@ -213,6 +247,11 @@ export const PlanSessionLive = Layer.scoped(
 
         yield* process.stderr.pipe(
           Stream.map((chunk) => decoder.decode(chunk)),
+          Stream.tap((chunk) =>
+            Effect.log("stderr chunk received").pipe(
+              Effect.annotateLogs({ chunkLength: String(chunk.length), preview: chunk.slice(0, 200) })
+            )
+          ),
           Stream.map(stripAnsi),
           Stream.flatMap((text) => {
             const lines = text.split("\n").filter((line) => line.trim().length > 0)
@@ -220,13 +259,14 @@ export const PlanSessionLive = Layer.scoped(
           }),
           Stream.mapEffect((line) =>
             Effect.gen(function*() {
-              yield* Effect.logDebug("stderr line received").pipe(
-                Effect.annotateLogs({ line })
+              yield* Effect.log("stderr line").pipe(
+                Effect.annotateLogs({ line: line.slice(0, 200) })
               )
               yield* Queue.offer(eventQueue, new PlanTextOutput({ text: line }))
             })
           ),
           Stream.runDrain,
+          Effect.tap(() => Effect.log("stderr stream completed")),
           Effect.tapError((err) =>
             Queue.offer(eventQueue, new PlanFailed({ message: `stderr stream error: ${String(err)}` }))
           ),
