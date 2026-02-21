@@ -26,6 +26,7 @@ export class StreamJsonMessage extends Schema.Class<StreamJsonMessage>("StreamJs
   session_id: Schema.optional(Schema.String),
   message: Schema.optional(
     Schema.Struct({
+      id: Schema.optional(Schema.String),
       content: Schema.optional(Schema.Array(ContentBlock))
     })
   )

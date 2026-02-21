@@ -91,6 +91,13 @@ export const MainLayer = Layer.mergeAll(
  * @since 1.0.0
  * @category event-loop
  */
+const formatTelegramHtml = (text: string) =>
+  text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+
 export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
 
@@ -251,19 +258,16 @@ export const runEventLoop = Effect.gen(function*() {
   const planEventStream = planSession.events.pipe(
     Stream.mapEffect((event) =>
       Match.value(event).pipe(
-        Match.tag("PlanTextOutput", (e) => {
-          const escaped = e.text
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-          return notifier.sendMessage(escaped.slice(0, 4096))
-        }),
+        Match.tag("PlanTextOutput", (e) => notifier.sendMessage(formatTelegramHtml(e.text).slice(0, 4096))),
         Match.tag("PlanQuestion", (e) =>
-          Effect.forEach(e.questions, (q) =>
-            notifier.sendMessage({
-              text: q.question,
+          Effect.forEach(e.questions, (q) => {
+            const formatted = formatTelegramHtml(q.question)
+            const header = q.header != null ? `<b>${formatTelegramHtml(q.header)}</b>\n` : ""
+            return notifier.sendMessage({
+              text: `${header}${formatted}`,
               options: q.options?.map((o) => ({ label: o.label }))
-            }))),
+            })
+          })),
         Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
         Match.tag("PlanFailed", (e) => notifier.sendMessage(`Plan failed: ${e.message}`)),
         Match.exhaustive

@@ -107,12 +107,23 @@ export function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
   return { prompt, dangerouslySkipPermissions, model }
 }
 
-export const createAskUserHandler = (
+const askUserQuestionSchema = {
+  questions: z.array(z.object({
+    question: z.string().describe("The question to ask the user"),
+    header: z.string().optional().describe("Short label (max 12 chars) displayed as a tag, e.g. 'Auth method'"),
+    options: z.array(z.object({
+      label: z.string().describe("Concise display text (1-5 words)"),
+      description: z.string().optional().describe("Explanation of what this option means")
+    })).min(2).max(4).describe("The available choices. Must have 2-4 options."),
+    multiSelect: z.boolean().optional().describe("Allow multiple selections")
+  }))
+}
+
+export const collectAnswers = async (
+  questionCount: number,
   lineReader: LineReader,
   stderr: { write(data: string): boolean }
-) =>
-async (args: { readonly questions: ReadonlyArray<{ readonly question: string }> }) => {
-  const questionCount = args.questions.length || 1
+) => {
   stderr.write(`claude-shim: ask_user MCP tool blocking for ${questionCount} answer(s)\n`)
   const answers: Array<string> = []
   while (answers.length < questionCount) {
@@ -137,9 +148,9 @@ export const createAskUserMcpServer = (
     tools: [
       tool(
         "ask_user",
-        "Ask the user a question and wait for their response via Telegram",
-        { questions: z.array(z.object({ question: z.string() })) },
-        createAskUserHandler(lineReader, stderr)
+        "Ask the user a question and wait for their response via Telegram. Always provide 2-4 options for the user to choose from.",
+        askUserQuestionSchema,
+        (args, _extra) => collectAnswers(args.questions.length || 1, lineReader, stderr)
       )
     ]
   })

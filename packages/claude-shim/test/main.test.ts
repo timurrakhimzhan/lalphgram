@@ -1,14 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { PassThrough } from "node:stream"
-import {
-  createAskUserHandler,
-  LineReader,
-  parseArgs,
-  ShimDeps,
-  type ShimDepsService,
-  shimProgram
-} from "../src/main.js"
+import { collectAnswers, LineReader, parseArgs, ShimDeps, type ShimDepsService, shimProgram } from "../src/main.js"
 
 function createMockQuery(messages: ReadonlyArray<Record<string, unknown>>) {
   const gen = (async function*() {
@@ -139,16 +132,15 @@ describe("LineReader", () => {
   })
 })
 
-describe("createAskUserHandler", () => {
-  it("reads 1 answer for single-question input", async () => {
+describe("collectAnswers", () => {
+  it("reads 1 answer for single question", async () => {
     // Arrange
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = handler({ questions: [{ question: "Pick one?" }] })
+    const promise = collectAnswers(1, reader, stderr)
     stream.write("Option A\n")
     const result = await promise
 
@@ -164,15 +156,9 @@ describe("createAskUserHandler", () => {
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = handler({
-      questions: [
-        { question: "First?" },
-        { question: "Second?" }
-      ]
-    })
+    const promise = collectAnswers(2, reader, stderr)
     stream.write("Option A\n")
     stream.write("Option B\n")
     const result = await promise
@@ -189,10 +175,9 @@ describe("createAskUserHandler", () => {
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = handler({ questions: [{ question: "Q1?" }, { question: "Q2?" }] })
+    const promise = collectAnswers(2, reader, stderr)
     stream.write("Only one\n")
     stream.end()
     const result = await promise

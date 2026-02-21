@@ -62,6 +62,7 @@ export type PlanEvent = PlanTextOutput | PlanQuestion | PlanCompleted | PlanFail
 interface ActiveSession {
   readonly process: CommandExecutor.Process
   readonly scope: Scope.CloseableScope
+  readonly stdinQueue: Queue.Queue<Uint8Array>
 }
 
 /**
@@ -162,12 +163,33 @@ export const PlanSessionLive = Layer.scoped(
           )
         )
 
-        yield* Ref.set(sessionRef, Option.some({ process, scope: processScope }))
+        const stdinQueue = yield* Queue.unbounded<Uint8Array>()
+        yield* Ref.set(sessionRef, Option.some({ process, scope: processScope, stdinQueue }))
         yield* Effect.log("Plan session process spawned").pipe(
           Effect.annotateLogs({ tempFile })
         )
 
+        yield* Stream.fromQueue(stdinQueue).pipe(
+          Stream.run(process.stdin),
+          Effect.catchAll((err) => Effect.logError(`stdin write error: ${String(err)}`)),
+          Effect.forkDaemon
+        )
+
         const decoder = new TextDecoder()
+        const pendingTextRef = yield* Ref.make<Option.Option<{ messageId: string; text: string }>>(
+          Option.none()
+        )
+
+        const flushPendingText = Effect.gen(function*() {
+          const pending = yield* Ref.get(pendingTextRef)
+          if (Option.isSome(pending)) {
+            yield* Effect.log("Flushing buffered text block").pipe(
+              Effect.annotateLogs({ textLength: String(pending.value.text.length) })
+            )
+            yield* Queue.offer(eventQueue, new PlanTextOutput({ text: pending.value.text }))
+            yield* Ref.set(pendingTextRef, Option.none())
+          }
+        })
 
         yield* process.stdout.pipe(
           Stream.map((chunk) => decoder.decode(chunk)),
@@ -205,16 +227,29 @@ export const PlanSessionLive = Layer.scoped(
                 })
               )
               if (msg.type !== "assistant" || msg.message?.content == null) {
+                yield* flushPendingText
                 return
               }
+              const messageId = msg.message.id ?? ""
+              const pending = yield* Ref.get(pendingTextRef)
+              if (Option.isSome(pending) && pending.value.messageId !== messageId) {
+                yield* flushPendingText
+              }
+              const hasAskUser = msg.message.content.some(
+                (b) =>
+                  b.type === "tool_use" && b.name === "mcp__ask-user__ask_user"
+              )
               for (const block of msg.message.content) {
-                if (block.type === "text" && block.text != null) {
-                  yield* Effect.log("Emitting text block").pipe(
-                    Effect.annotateLogs({ textLength: String(block.text.length) })
+                if (block.type === "text" && block.text != null && hasAskUser) {
+                  yield* Effect.log("Suppressing text block (ask_user in same line)")
+                } else if (block.type === "text" && block.text != null) {
+                  yield* Effect.log("Buffering text block").pipe(
+                    Effect.annotateLogs({ textLength: String(block.text.length), messageId })
                   )
-                  yield* Queue.offer(eventQueue, new PlanTextOutput({ text: block.text }))
+                  yield* Ref.set(pendingTextRef, Option.some({ messageId, text: block.text }))
                 } else if (block.type === "tool_use" && block.name === "mcp__ask-user__ask_user") {
-                  yield* Effect.log("ask_user MCP tool detected")
+                  yield* Effect.log("ask_user MCP tool detected, discarding buffered text")
+                  yield* Ref.set(pendingTextRef, Option.none())
                   const askParsed = yield* decodeAskInput(block.input).pipe(
                     Effect.orElseSucceed(() => ({ questions: undefined }))
                   )
@@ -230,9 +265,8 @@ export const PlanSessionLive = Layer.scoped(
             })
           ),
           Stream.runDrain,
-          Effect.tap(() =>
-            Effect.log("stdout stream completed")
-          ),
+          Effect.tap(() => flushPendingText),
+          Effect.tap(() => Effect.log("stdout stream completed")),
           Effect.tapError((err) =>
             Queue.offer(eventQueue, new PlanFailed({ message: `stdout stream error: ${String(err)}` }))
           ),
@@ -303,12 +337,7 @@ export const PlanSessionLive = Layer.scoped(
           })
         }
         const encoder = new TextEncoder()
-        yield* Stream.make(encoder.encode(text + "\n")).pipe(
-          Stream.run(current.value.process.stdin),
-          Effect.mapError((err) =>
-            new PlanSessionError({ message: `Failed to write to stdin: ${String(err)}`, cause: err })
-          )
-        )
+        yield* Queue.offer(current.value.stdinQueue, encoder.encode(text + "\n"))
       })
 
     const isActive = Ref.get(sessionRef).pipe(Effect.map(Option.isSome))
