@@ -213,8 +213,8 @@ export const PlanSessionLive = Layer.scoped(
                     Effect.annotateLogs({ textLength: String(block.text.length) })
                   )
                   yield* Queue.offer(eventQueue, new PlanTextOutput({ text: block.text }))
-                } else if (block.type === "tool_use" && block.name === "AskUserQuestion") {
-                  yield* Effect.log("AskUserQuestion detected")
+                } else if (block.type === "tool_use" && block.name === "mcp__ask-user__ask_user") {
+                  yield* Effect.log("ask_user MCP tool detected")
                   const askParsed = yield* decodeAskInput(block.input).pipe(
                     Effect.orElseSucceed(() => ({ questions: undefined }))
                   )

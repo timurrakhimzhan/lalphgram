@@ -27,7 +27,7 @@ const ndjsonMessage = (content: ReadonlyArray<Record<string, unknown>>) =>
 const textMessage = (text: string) => ndjsonMessage([{ type: "text", text }])
 
 const askQuestionMessage = (questions: ReadonlyArray<Record<string, unknown>>) =>
-  ndjsonMessage([{ type: "tool_use", name: "AskUserQuestion", input: { questions } }])
+  ndjsonMessage([{ type: "tool_use", name: "mcp__ask-user__ask_user", input: { questions } }])
 
 const catCommandLayer = Layer.succeed(
   PlanCommandBuilder,
