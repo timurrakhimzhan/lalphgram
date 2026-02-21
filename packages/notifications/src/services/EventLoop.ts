@@ -251,7 +251,13 @@ export const runEventLoop = Effect.gen(function*() {
   const planEventStream = planSession.events.pipe(
     Stream.mapEffect((event) =>
       Match.value(event).pipe(
-        Match.tag("PlanTextOutput", (e) => notifier.sendMessage(e.text.slice(0, 4096))),
+        Match.tag("PlanTextOutput", (e) => {
+          const escaped = e.text
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+          return notifier.sendMessage(escaped.slice(0, 4096))
+        }),
         Match.tag("PlanQuestion", (e) =>
           Effect.forEach(e.questions, (q) =>
             notifier.sendMessage({

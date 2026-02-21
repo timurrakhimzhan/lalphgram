@@ -184,17 +184,16 @@ export const PlanSessionLive = Layer.scoped(
                 Effect.map(Option.some),
                 Effect.catchTag("ParseError", (err) =>
                   Effect.logWarning("stdout line is not valid JSON, treating as raw text").pipe(
-                    Effect.annotateLogs({ parseError: err.message.slice(0, 100) }),
+                    Effect.annotateLogs({ rawLine: line.slice(0, 300), parseError: err.message.slice(0, 100) }),
                     Effect.map(() => Option.none<StreamJsonMessage>())
                   ))
               )
               if (Option.isNone(parsed)) {
                 const cleaned = stripAnsi(line).trim()
                 if (cleaned.length > 0) {
-                  yield* Effect.log("stdout raw line (not JSON)").pipe(
+                  yield* Effect.logDebug("stdout raw line (not JSON), skipping").pipe(
                     Effect.annotateLogs({ line: cleaned.slice(0, 200) })
                   )
-                  yield* Queue.offer(eventQueue, new PlanTextOutput({ text: cleaned }))
                 }
                 return
               }
@@ -258,12 +257,9 @@ export const PlanSessionLive = Layer.scoped(
             return Stream.fromIterable(lines)
           }),
           Stream.mapEffect((line) =>
-            Effect.gen(function*() {
-              yield* Effect.log("stderr line").pipe(
-                Effect.annotateLogs({ line: line.slice(0, 200) })
-              )
-              yield* Queue.offer(eventQueue, new PlanTextOutput({ text: line }))
-            })
+            Effect.log("stderr line (suppressed from output)").pipe(
+              Effect.annotateLogs({ line: line.slice(0, 200) })
+            )
           ),
           Stream.runDrain,
           Effect.tap(() => Effect.log("stderr stream completed")),
