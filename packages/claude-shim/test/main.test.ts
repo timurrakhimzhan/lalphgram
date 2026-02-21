@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream"
 import { describe, expect, it, vi } from "vitest"
 import type { SessionDeps } from "../src/main.js"
-import { parseArgs, run } from "../src/main.js"
+import { createAskUserQuestionHook, LineReader, parseArgs, run } from "../src/main.js"
 
 async function* asyncGen<T>(items: ReadonlyArray<T>): AsyncGenerator<T, void> {
   for (const item of items) {
@@ -50,6 +50,177 @@ function createMockDeps(overrides?: {
 
   return { deps, stdinStream, written, mockSend, mockStream, mockClose }
 }
+
+describe("LineReader", () => {
+  it("reads buffered line immediately", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    stream.write("hello\n")
+
+    // Allow readline to process
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Act
+    const line = await reader.nextLine()
+
+    // Assert
+    expect(line).toBe("hello")
+    stream.end()
+  })
+
+  it("waits when buffer is empty and resolves when line arrives", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+
+    // Act
+    const promise = reader.nextLine()
+    stream.write("delayed\n")
+    const line = await promise
+
+    // Assert
+    expect(line).toBe("delayed")
+    stream.end()
+  })
+
+  it("returns empty string when stream closes while waiting", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+
+    // Act
+    const promise = reader.nextLine()
+    stream.end()
+    const line = await promise
+
+    // Assert
+    expect(line).toBe("")
+  })
+
+  it("reports isClosed after stream ends and buffer drains", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    stream.write("line1\n")
+    stream.end()
+
+    // Allow readline to process
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Act & Assert — buffer has content, so not closed yet
+    expect(reader.isClosed).toBe(false)
+    await reader.nextLine()
+    expect(reader.isClosed).toBe(true)
+  })
+})
+
+describe("createAskUserQuestionHook", () => {
+  it("reads 1 answer for single-question input", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    const stderr = { write: vi.fn(() => true) }
+    const hook = createAskUserQuestionHook(reader, stderr)
+
+    const input = {
+      hook_event_name: "PreToolUse" as const,
+      tool_name: "AskUserQuestion",
+      tool_input: { questions: [{ question: "Pick one?", options: [] }] },
+      tool_use_id: "tu_1",
+      session_id: "s1",
+      transcript_path: "/tmp/t",
+      cwd: "/tmp"
+    }
+
+    // Act
+    const promise = hook(input, "tu_1", { signal: AbortSignal.timeout(5000) })
+    stream.write("Option A\n")
+    const result = await promise
+
+    // Assert
+    expect(result).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "User answered: Option A"
+      }
+    })
+    stream.end()
+  })
+
+  it("reads 2 answers for multi-question input", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    const stderr = { write: vi.fn(() => true) }
+    const hook = createAskUserQuestionHook(reader, stderr)
+
+    const input = {
+      hook_event_name: "PreToolUse" as const,
+      tool_name: "AskUserQuestion",
+      tool_input: {
+        questions: [
+          { question: "First?", options: [] },
+          { question: "Second?", options: [] }
+        ]
+      },
+      tool_use_id: "tu_2",
+      session_id: "s1",
+      transcript_path: "/tmp/t",
+      cwd: "/tmp"
+    }
+
+    // Act
+    const promise = hook(input, "tu_2", { signal: AbortSignal.timeout(5000) })
+    stream.write("Option A\n")
+    stream.write("Option B\n")
+    const result = await promise
+
+    // Assert
+    expect(result).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "User answered: Option A; Option B"
+      }
+    })
+    stream.end()
+  })
+
+  it("defaults to 1 question when questions array is missing", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    const stderr = { write: vi.fn(() => true) }
+    const hook = createAskUserQuestionHook(reader, stderr)
+
+    const input = {
+      hook_event_name: "PreToolUse" as const,
+      tool_name: "AskUserQuestion",
+      tool_input: {},
+      tool_use_id: "tu_3",
+      session_id: "s1",
+      transcript_path: "/tmp/t",
+      cwd: "/tmp"
+    }
+
+    // Act
+    const promise = hook(input, "tu_3", { signal: AbortSignal.timeout(5000) })
+    stream.write("My answer\n")
+    const result = await promise
+
+    // Assert
+    expect(result).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "User answered: My answer"
+      }
+    })
+    stream.end()
+  })
+})
 
 describe("parseArgs", () => {
   it("extracts positional prompt", () => {
@@ -125,7 +296,7 @@ describe("parseArgs", () => {
 })
 
 describe("run", () => {
-  it("creates session with correct options", async () => {
+  it("creates session with correct options including hooks", async () => {
     // Arrange
     const { deps, mockStream, stdinStream } = createMockDeps()
     mockStream.mockReturnValue(asyncGen([
@@ -137,11 +308,19 @@ describe("run", () => {
     await run(["--dangerously-skip-permissions", "Plan this"], deps)
 
     // Assert
-    expect(deps.createSession).toHaveBeenCalledWith({
-      model: "claude-sonnet-4-6",
-      pathToClaudeCodeExecutable: "/usr/local/bin/claude",
-      permissionMode: "bypassPermissions"
-    })
+    expect(deps.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-4-6",
+        pathToClaudeCodeExecutable: "/usr/local/bin/claude",
+        permissionMode: "bypassPermissions",
+        hooks: {
+          PreToolUse: [expect.objectContaining({
+            matcher: "AskUserQuestion",
+            timeout: 300
+          })]
+        }
+      })
+    )
   })
 
   it("uses model from --model arg over env var", async () => {

@@ -5,9 +5,89 @@
  * @since 1.0.0
  */
 import { unstable_v2_createSession } from "@anthropic-ai/claude-agent-sdk"
-import type { SDKSession } from "@anthropic-ai/claude-agent-sdk"
+import type { HookCallback, SDKSession } from "@anthropic-ai/claude-agent-sdk"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+
+export class LineReader {
+  private readonly buffer: Array<string> = []
+  private waiting: ((line: string) => void) | null = null
+  private _closed = false
+
+  constructor(input: NodeJS.ReadableStream) {
+    const rl = createInterface({ input, terminal: false })
+    rl.on("line", (line) => {
+      if (this.waiting) {
+        const resolve = this.waiting
+        this.waiting = null
+        resolve(line)
+      } else {
+        this.buffer.push(line)
+      }
+    })
+    rl.on("close", () => {
+      this._closed = true
+      if (this.waiting) {
+        const resolve = this.waiting
+        this.waiting = null
+        resolve("")
+      }
+    })
+  }
+
+  get isClosed(): boolean {
+    return this._closed && this.buffer.length === 0
+  }
+
+  nextLine(): Promise<string> {
+    if (this.buffer.length > 0) {
+      return Promise.resolve(this.buffer.shift()!)
+    }
+    if (this._closed) {
+      return Promise.resolve("")
+    }
+    return new Promise<string>((resolve) => {
+      this.waiting = resolve
+    })
+  }
+}
+
+export function createAskUserQuestionHook(
+  lineReader: LineReader,
+  stderr: { write(data: string): boolean }
+): HookCallback {
+  return async (input) => {
+    const toolInput = "tool_input" in input ? input.tool_input : undefined
+    const questions = toolInput != null
+        && typeof toolInput === "object"
+        && "questions" in toolInput
+        && Array.isArray(toolInput.questions)
+      ? toolInput.questions
+      : undefined
+    const questionCount = questions?.length ?? 1
+
+    stderr.write(`claude-shim: AskUserQuestion hook blocking for ${questionCount} answer(s)\n`)
+
+    const answers: Array<string> = []
+    while (answers.length < questionCount) {
+      const line = await lineReader.nextLine()
+      const trimmed = line.trim()
+      if (trimmed.length === 0 && lineReader.isClosed) break
+      if (trimmed.length === 0) continue
+      answers.push(trimmed)
+    }
+
+    stderr.write(`claude-shim: AskUserQuestion hook received: ${answers.join("; ")}\n`)
+
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse" as const,
+        permissionDecision: "deny" as const,
+        permissionDecisionReason: `User answered: ${answers.join("; ")}`
+      }
+    }
+  }
+}
 
 export interface ParsedArgs {
   readonly prompt: string
@@ -84,9 +164,19 @@ export async function run(
 
   const model = parsed.model ?? deps.env["CLAUDE_MODEL"] ?? "claude-sonnet-4-6"
 
+  const lineReader = new LineReader(stdin)
+  const askHook = createAskUserQuestionHook(lineReader, stderr)
+
   const session = createSession({
     model,
     pathToClaudeCodeExecutable: realClaudePath,
+    hooks: {
+      PreToolUse: [{
+        matcher: "AskUserQuestion",
+        hooks: [askHook],
+        timeout: 300
+      }]
+    },
     ...(parsed.dangerouslySkipPermissions
       ? { permissionMode: "bypassPermissions" }
       : {})
@@ -97,15 +187,14 @@ export async function run(
     let done = await streamToStdout(session, stdout)
 
     if (!done) {
-      const rl = createInterface({ input: stdin, terminal: false })
-      for await (const line of rl) {
+      while (!lineReader.isClosed) {
+        const line = await lineReader.nextLine()
         const trimmed = line.trim()
         if (trimmed.length === 0) continue
         await session.send(trimmed)
         done = await streamToStdout(session, stdout)
         if (done) break
       }
-      rl.close()
     }
   } finally {
     session.close()
