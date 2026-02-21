@@ -217,7 +217,7 @@ describe("PlanSession", () => {
       }).pipe(Effect.provide(testLayer))
     }))
 
-  it.live("emits PlanTextOutput summary for non-AskUserQuestion tool_use", () =>
+  it.live("does not emit PlanTextOutput for non-AskUserQuestion tool_use", () =>
     Effect.gen(function*() {
       // Arrange
       const payload = ndjsonMessage([{ type: "tool_use", name: "Bash", input: { command: "ls" } }])
@@ -228,16 +228,13 @@ describe("PlanSession", () => {
 
         // Act
         yield* session.start("test plan")
+        yield* Effect.sleep("100 millis")
 
-        // Assert
-        const event = yield* session.events.pipe(
-          Stream.filter((e) => e._tag === "PlanTextOutput"),
-          Stream.runHead
-        )
+        // Assert — only PlanCompleted should be emitted, no PlanTextOutput
+        const event = yield* Stream.runHead(session.events)
         expect(event._tag).toBe("Some")
         if (event._tag === "Some") {
-          expect(event.value).toBeInstanceOf(PlanTextOutput)
-          expect(event.value).toMatchObject({ text: "▶ Bash" })
+          expect(event.value).toBeInstanceOf(PlanCompleted)
         }
       }).pipe(Effect.provide(testLayer))
     }))

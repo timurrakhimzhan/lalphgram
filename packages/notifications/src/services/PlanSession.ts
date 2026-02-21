@@ -225,10 +225,6 @@ export const PlanSessionLive = Layer.scoped(
                   yield* Effect.log("Tool invoked").pipe(
                     Effect.annotateLogs({ tool: block.name })
                   )
-                  yield* Queue.offer(
-                    eventQueue,
-                    new PlanTextOutput({ text: `▶ ${block.name}` })
-                  )
                 }
               }
             })
