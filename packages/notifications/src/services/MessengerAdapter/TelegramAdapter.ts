@@ -28,8 +28,12 @@ export const TelegramAdapterLive = Layer.scoped(
     const messageQueue = yield* Queue.unbounded<IncomingMessage>()
     const questionCounter = yield* Ref.make(0)
 
-    bot.action(/^q:(\d+):(.+)$/, (ctx) => {
-      const label = ctx.match[2] ?? ""
+    const buttonLabels = new Map<string, string>()
+
+    bot.action(/^q:(\d+):(\d+)$/, (ctx) => {
+      const key = `${ctx.match[1]}:${ctx.match[2]}`
+      const label = buttonLabels.get(key) ?? ctx.match[2] ?? ""
+      buttonLabels.delete(key)
       if (ctx.from != null) {
         const msg = new IncomingMessage({
           chatId: String(ctx.chat?.id ?? ""),
@@ -113,9 +117,10 @@ export const TelegramAdapterLive = Layer.scoped(
           })
         } else {
           const qId = yield* Ref.updateAndGet(questionCounter, (n) => n + 1)
-          const buttons = message.options?.map((o) => [
-            Markup.button.callback(o.label, `q:${qId}:${o.label}`)
-          ]) ?? []
+          const buttons = message.options?.map((o, i) => {
+            buttonLabels.set(`${qId}:${i}`, o.label)
+            return [Markup.button.callback(o.label, `q:${qId}:${i}`)]
+          }) ?? []
           const keyboard = buttons.length > 0 ? Markup.inlineKeyboard(buttons) : undefined
 
           yield* Effect.tryPromise({
