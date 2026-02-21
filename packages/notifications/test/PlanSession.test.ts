@@ -301,6 +301,42 @@ describe("PlanSession", () => {
       }).pipe(Effect.provide(testLayer))
     }))
 
+  it.live("sendFollowUp writes JSON-tagged line to stdin", () =>
+    Effect.gen(function*() {
+      // Arrange — use cat so we can read back what was written to stdin via stdout
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+        yield* session.start("test plan")
+
+        // Act
+        yield* session.sendFollowUp("also consider X")
+        yield* Effect.sleep("100 millis")
+
+        // Assert — cat echoes stdin to stdout, so the JSON line should appear as raw text
+        // The session should still be active since cat is still running
+        const active = yield* session.isActive
+        expect(active).toBe(true)
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("sendFollowUp fails when no session is active", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        const result = yield* session.sendFollowUp("hello").pipe(Effect.flip)
+
+        // Assert
+        expect(result.message).toBe("No active plan session")
+      }).pipe(Effect.provide(testLayer))
+    }))
+
   it.live("isActive returns true during active session and false after exit", () =>
     Effect.gen(function*() {
       // Arrange

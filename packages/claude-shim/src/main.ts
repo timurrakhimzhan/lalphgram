@@ -4,7 +4,7 @@
  * @since 1.0.0
  */
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
-import type { Query, query, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Context, Data, Effect, Stream } from "effect"
 import { createInterface } from "node:readline"
 import { z } from "zod/v4"
@@ -13,10 +13,12 @@ export class LineReader {
   private readonly buffer: Array<string> = []
   private waiting: ((line: string) => void) | null = null
   private _closed = false
+  interceptor: ((line: string) => boolean) | null = null
 
   constructor(input: NodeJS.ReadableStream) {
     const rl = createInterface({ input, terminal: false })
     rl.on("line", (line) => {
+      if (this.interceptor?.(line)) return
       if (this.waiting) {
         const resolve = this.waiting
         this.waiting = null
@@ -49,6 +51,50 @@ export class LineReader {
     return new Promise<string>((resolve) => {
       this.waiting = resolve
     })
+  }
+}
+
+const iterDone: IteratorReturnResult<undefined> = { value: undefined, done: true }
+
+export class FollowUpQueue implements AsyncIterable<SDKUserMessage> {
+  private readonly pending: Array<SDKUserMessage> = []
+  private waiting: ((result: IteratorResult<SDKUserMessage>) => void) | null = null
+  private _done = false
+
+  offer(msg: SDKUserMessage): void {
+    if (this._done) return
+    if (this.waiting) {
+      const resolve = this.waiting
+      this.waiting = null
+      resolve({ value: msg, done: false })
+    } else {
+      this.pending.push(msg)
+    }
+  }
+
+  close(): void {
+    this._done = true
+    if (this.waiting) {
+      const resolve = this.waiting
+      this.waiting = null
+      resolve(iterDone)
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        if (this.pending.length > 0) {
+          return Promise.resolve({ value: this.pending.shift()!, done: false })
+        }
+        if (this._done) {
+          return Promise.resolve(iterDone)
+        }
+        return new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+          this.waiting = resolve
+        })
+      }
+    }
   }
 }
 
@@ -155,6 +201,15 @@ export const createAskUserMcpServer = (
     ]
   })
 
+function getFollowUpText(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null
+  if (!("type" in value) || !("text" in value)) return null
+  // Use JSON round-trip to get typed access without assertions
+  const { text, type } = Object.fromEntries(Object.entries(value))
+  if (type === "follow_up" && typeof text === "string") return text
+  return null
+}
+
 export const shimProgram = Effect.gen(function*() {
   const deps = yield* ShimDeps
   const parsed = parseArgs(deps.args)
@@ -184,8 +239,46 @@ export const shimProgram = Effect.gen(function*() {
 
   yield* Effect.addFinalizer(() => Effect.sync(() => q.close()))
 
+  const followUpQueue = new FollowUpQueue()
+  let sessionId = ""
+
+  lineReader.interceptor = (line) => {
+    try {
+      const text = getFollowUpText(JSON.parse(line))
+      if (text === null) return false
+      deps.stderr.write(`claude-shim: follow_up intercepted: ${text.slice(0, 100)}\n`)
+      followUpQueue.offer({
+        type: "user",
+        message: { role: "user", content: text },
+        parent_tool_use_id: null,
+        session_id: sessionId
+      })
+      return true
+    } catch {
+      // not JSON — pass through to collectAnswers
+    }
+    return false
+  }
+
+  yield* Effect.tryPromise({
+    try: () => q.streamInput(followUpQueue),
+    catch: (err) => new ShimError({ message: "streamInput error", cause: err })
+  }).pipe(
+    Effect.catchAll((err) => Effect.logError(`streamInput error: ${String(err)}`)),
+    Effect.forkScoped
+  )
+
+  yield* Effect.addFinalizer(() => Effect.sync(() => followUpQueue.close()))
+
   yield* Stream.fromAsyncIterable(q, (err) => new ShimError({ message: "Stream error", cause: err })).pipe(
-    Stream.tap((msg: SDKMessage) => Effect.sync(() => deps.stdout.write(JSON.stringify(msg) + "\n"))),
+    Stream.tap((msg: SDKMessage) =>
+      Effect.sync(() => {
+        if (msg.type === "system" && msg.subtype === "init") {
+          sessionId = msg.session_id
+        }
+        deps.stdout.write(JSON.stringify(msg) + "\n")
+      })
+    ),
     Stream.takeUntil((msg: SDKMessage) => msg.type === "result"),
     Stream.runDrain
   )

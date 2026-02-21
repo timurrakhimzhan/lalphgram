@@ -120,6 +120,7 @@ const makePlanSessionMock = () =>
   PlanSession.of({
     start: vi.fn(() => Effect.succeed(undefined)),
     answer: vi.fn(() => Effect.succeed(undefined)),
+    sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
     isActive: Effect.succeed(false),
     events: Stream.never
   })

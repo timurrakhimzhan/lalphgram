@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { PassThrough } from "node:stream"
-import { collectAnswers, LineReader, parseArgs, ShimDeps, type ShimDepsService, shimProgram } from "../src/main.js"
+import {
+  collectAnswers,
+  FollowUpQueue,
+  LineReader,
+  parseArgs,
+  ShimDeps,
+  type ShimDepsService,
+  shimProgram
+} from "../src/main.js"
 
 function createMockQuery(messages: ReadonlyArray<Record<string, unknown>>) {
   const gen = (async function*() {
@@ -129,6 +137,130 @@ describe("LineReader", () => {
     expect(reader.isClosed).toBe(false)
     await reader.nextLine()
     expect(reader.isClosed).toBe(true)
+  })
+
+  it("intercepted lines do not appear in nextLine", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    const intercepted: Array<string> = []
+    reader.interceptor = (line) => {
+      if (line.startsWith("INTERCEPT:")) {
+        intercepted.push(line)
+        return true
+      }
+      return false
+    }
+
+    // Act
+    stream.write("INTERCEPT:secret\n")
+    stream.write("normal line\n")
+    await new Promise((r) => setTimeout(r, 10))
+    const line = await reader.nextLine()
+
+    // Assert
+    expect(line).toBe("normal line")
+    expect(intercepted).toEqual(["INTERCEPT:secret"])
+    stream.end()
+  })
+
+  it("interceptor receives lines that are waiting", async () => {
+    // Arrange
+    const stream = new PassThrough()
+    const reader = new LineReader(stream)
+    reader.interceptor = (line) => line === "skip"
+
+    // Act
+    const promise = reader.nextLine()
+    stream.write("skip\n")
+    stream.write("keep\n")
+    const line = await promise
+
+    // Assert
+    expect(line).toBe("keep")
+    stream.end()
+  })
+})
+
+describe("FollowUpQueue", () => {
+  it("yields offered messages via async iteration", async () => {
+    // Arrange
+    const queue = new FollowUpQueue()
+    const msg = {
+      type: "user" as const,
+      message: { role: "user" as const, content: "hello" },
+      parent_tool_use_id: null,
+      session_id: "s1"
+    }
+
+    // Act
+    queue.offer(msg)
+    queue.close()
+    const results: Array<unknown> = []
+    for await (const m of queue) {
+      results.push(m)
+    }
+
+    // Assert
+    expect(results).toEqual([msg])
+  })
+
+  it("waits for offer when no messages pending", async () => {
+    // Arrange
+    const queue = new FollowUpQueue()
+    const msg = {
+      type: "user" as const,
+      message: { role: "user" as const, content: "delayed" },
+      parent_tool_use_id: null,
+      session_id: "s1"
+    }
+
+    // Act
+    const iter = queue[Symbol.asyncIterator]()
+    const promise = iter.next()
+    queue.offer(msg)
+    const result = await promise
+
+    // Assert
+    expect(result.done).toBe(false)
+    expect(result.value).toEqual(msg)
+    queue.close()
+  })
+
+  it("signals done after close when empty", async () => {
+    // Arrange
+    const queue = new FollowUpQueue()
+
+    // Act
+    const iter = queue[Symbol.asyncIterator]()
+    const promise = iter.next()
+    queue.close()
+    const result = await promise
+
+    // Assert
+    expect(result.done).toBe(true)
+  })
+
+  it("ignores offers after close", async () => {
+    // Arrange
+    const queue = new FollowUpQueue()
+    queue.close()
+    const msg = {
+      type: "user" as const,
+      message: { role: "user" as const, content: "too late" },
+      parent_tool_use_id: null,
+      session_id: "s1"
+    }
+
+    // Act
+    queue.offer(msg)
+    const results: Array<unknown> = []
+    for await (const m of queue) {
+      results.push(m)
+    }
+
+    // Assert
+    expect(results).toEqual([])
   })
 })
 
@@ -379,6 +511,84 @@ describe("shimProgram", () => {
           message: "REAL_CLAUDE_PATH not set"
         })
       }
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+  })
+
+  it.effect("calls streamInput with follow-up queue", () => {
+    const { deps, mockQuery, stdinStream } = createMockDeps({
+      args: ["Do something"]
+    })
+    stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
+
+      // Assert
+      expect(mockQuery.streamInput).toHaveBeenCalledTimes(1)
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+  })
+
+  it.effect("routes follow_up JSON lines to streamInput instead of collectAnswers", () => {
+    const offered: Array<unknown> = []
+    const stdinStream = new PassThrough()
+    // Generator that delays before yielding result, so the follow_up line can be processed
+    const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+    const gen = (async function*() {
+      yield { type: "system", subtype: "init", session_id: "test-session" }
+      // Write follow_up and wait for interceptor to process it
+      stdinStream.write(`${JSON.stringify({ type: "follow_up", text: "also consider X" })}\n`)
+      await delay(50)
+      stdinStream.end()
+      yield { type: "result", subtype: "success" }
+    })()
+    const mockQuery = Object.assign(gen, {
+      close: vi.fn(),
+      interrupt: vi.fn(() => Promise.resolve()),
+      setPermissionMode: vi.fn(() => Promise.resolve()),
+      setModel: vi.fn(() => Promise.resolve()),
+      setMaxThinkingTokens: vi.fn(() => Promise.resolve()),
+      initializationResult: vi.fn(() => Promise.resolve({})),
+      supportedCommands: vi.fn(() => Promise.resolve([])),
+      supportedModels: vi.fn(() => Promise.resolve([])),
+      mcpServerStatus: vi.fn(() => Promise.resolve([])),
+      accountInfo: vi.fn(() => Promise.resolve({})),
+      rewindFiles: vi.fn(() => Promise.resolve({})),
+      reconnectMcpServer: vi.fn(() => Promise.resolve()),
+      toggleMcpServer: vi.fn(() => Promise.resolve()),
+      setMcpServers: vi.fn(() => Promise.resolve({})),
+      streamInput: vi.fn(async (stream: AsyncIterable<unknown>) => {
+        for await (const msg of stream) {
+          offered.push(msg)
+        }
+      }),
+      stopTask: vi.fn(() => Promise.resolve()),
+      return: gen.return.bind(gen),
+      throw: gen.throw.bind(gen),
+      next: gen.next.bind(gen),
+      [Symbol.asyncIterator]: () => gen
+    })
+    const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
+    const deps: ShimDepsService = {
+      args: ["Do something"],
+      createQuery: mockCreateQuery,
+      stdout: { write: vi.fn(() => true) },
+      stderr: { write: vi.fn(() => true) },
+      stdin: stdinStream,
+      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
+    }
+
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
+
+      // Assert
+      expect(offered).toHaveLength(1)
+      expect(offered[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "also consider X" },
+        parent_tool_use_id: null,
+        session_id: "test-session"
+      })
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 })

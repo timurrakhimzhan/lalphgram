@@ -72,6 +72,7 @@ interface ActiveSession {
 export interface PlanSessionService {
   readonly start: (planText: string) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
+  readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly isActive: Effect.Effect<boolean>
   readonly events: Stream.Stream<PlanEvent, PlanSessionError>
 }
@@ -340,6 +341,20 @@ export const PlanSessionLive = Layer.scoped(
         yield* Queue.offer(current.value.stdinQueue, encoder.encode(text + "\n"))
       })
 
+    const sendFollowUp = (text: string) =>
+      Effect.gen(function*() {
+        const current = yield* Ref.get(sessionRef)
+        if (Option.isNone(current)) {
+          return yield* new PlanSessionError({
+            message: "No active plan session",
+            cause: null
+          })
+        }
+        const encoder = new TextEncoder()
+        const line = JSON.stringify({ type: "follow_up", text }) + "\n"
+        yield* Queue.offer(current.value.stdinQueue, encoder.encode(line))
+      })
+
     const isActive = Ref.get(sessionRef).pipe(Effect.map(Option.isSome))
 
     const events: Stream.Stream<PlanEvent, PlanSessionError> = Stream.fromQueue(eventQueue).pipe(
@@ -349,6 +364,7 @@ export const PlanSessionLive = Layer.scoped(
     return PlanSession.of({
       start: (planText) => start(planText).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       answer: (text) => answer(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      sendFollowUp: (text) => sendFollowUp(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       isActive,
       events
     })

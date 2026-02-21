@@ -113,6 +113,7 @@ export const runEventLoop = Effect.gen(function*() {
 
   const collectingPlan = yield* Ref.make(false)
   const planBuffer = yield* Ref.make<ReadonlyArray<string>>([])
+  const pendingAnswerCount = yield* Ref.make(0)
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -239,11 +240,21 @@ export const runEventLoop = Effect.gen(function*() {
       }
       const active = yield* planSession.isActive
       if (active) {
-        yield* Effect.log("Forwarding answer to plan session")
-        yield* planSession.answer(msg.text).pipe(
-          Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
-          Effect.orElseSucceed(() => undefined)
-        )
+        const pending = yield* Ref.get(pendingAnswerCount)
+        if (pending > 0) {
+          yield* Effect.log("Forwarding answer to plan session")
+          yield* Ref.update(pendingAnswerCount, (n) => n - 1)
+          yield* planSession.answer(msg.text).pipe(
+            Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
+            Effect.orElseSucceed(() => undefined)
+          )
+        } else {
+          yield* Effect.log("Sending follow-up to plan session")
+          yield* planSession.sendFollowUp(msg.text).pipe(
+            Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
+            Effect.orElseSucceed(() => undefined)
+          )
+        }
       }
     }).pipe(Effect.annotateLogs("service", "PlanInput"))
 
@@ -260,12 +271,15 @@ export const runEventLoop = Effect.gen(function*() {
       Match.value(event).pipe(
         Match.tag("PlanTextOutput", (e) => notifier.sendMessage(formatTelegramHtml(e.text).slice(0, 4096))),
         Match.tag("PlanQuestion", (e) =>
-          Effect.forEach(e.questions, (q) => {
-            const formatted = formatTelegramHtml(q.question)
-            const header = q.header != null ? `<b>${formatTelegramHtml(q.header)}</b>\n` : ""
-            return notifier.sendMessage({
-              text: `${header}${formatted}`,
-              options: q.options?.map((o) => ({ label: o.label }))
+          Effect.gen(function*() {
+            yield* Ref.update(pendingAnswerCount, (n) => n + e.questions.length)
+            yield* Effect.forEach(e.questions, (q) => {
+              const formatted = formatTelegramHtml(q.question)
+              const header = q.header != null ? `<b>${formatTelegramHtml(q.header)}</b>\n` : ""
+              return notifier.sendMessage({
+                text: `${header}${formatted}`,
+                options: q.options?.map((o) => ({ label: o.label }))
+              })
             })
           })),
         Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
