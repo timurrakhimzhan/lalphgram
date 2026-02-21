@@ -1,42 +1,66 @@
+import { describe, expect, it, vi } from "@effect/vitest"
+import { Effect, Layer } from "effect"
 import { PassThrough } from "node:stream"
-import { describe, expect, it, vi } from "vitest"
-import type { SessionDeps } from "../src/main.js"
-import { createAskUserQuestionHook, LineReader, parseArgs, run } from "../src/main.js"
+import {
+  createAskUserHandler,
+  LineReader,
+  parseArgs,
+  ShimDeps,
+  type ShimDepsService,
+  shimProgram
+} from "../src/main.js"
 
-async function* asyncGen<T>(items: ReadonlyArray<T>): AsyncGenerator<T, void> {
-  for (const item of items) {
-    yield item
-  }
+function createMockQuery(messages: ReadonlyArray<Record<string, unknown>>) {
+  const gen = (async function*() {
+    for (const m of messages) yield m
+  })()
+
+  return Object.assign(gen, {
+    close: vi.fn(),
+    interrupt: vi.fn(() => Promise.resolve()),
+    setPermissionMode: vi.fn(() => Promise.resolve()),
+    setModel: vi.fn(() => Promise.resolve()),
+    setMaxThinkingTokens: vi.fn(() => Promise.resolve()),
+    initializationResult: vi.fn(() => Promise.resolve({})),
+    supportedCommands: vi.fn(() => Promise.resolve([])),
+    supportedModels: vi.fn(() => Promise.resolve([])),
+    mcpServerStatus: vi.fn(() => Promise.resolve([])),
+    accountInfo: vi.fn(() => Promise.resolve({})),
+    rewindFiles: vi.fn(() => Promise.resolve({})),
+    reconnectMcpServer: vi.fn(() => Promise.resolve()),
+    toggleMcpServer: vi.fn(() => Promise.resolve()),
+    setMcpServers: vi.fn(() => Promise.resolve({})),
+    streamInput: vi.fn(() => Promise.resolve()),
+    stopTask: vi.fn(() => Promise.resolve()),
+    return: gen.return.bind(gen),
+    throw: gen.throw.bind(gen),
+    next: gen.next.bind(gen),
+    [Symbol.asyncIterator]: () => gen
+  })
 }
 
 function createMockDeps(overrides?: {
+  readonly args?: ReadonlyArray<string>
   readonly env?: Record<string, string | undefined>
+  readonly messages?: ReadonlyArray<Record<string, unknown>>
 }): {
-  deps: SessionDeps
+  deps: ShimDepsService
   stdinStream: PassThrough
   written: Array<string>
-  mockSend: ReturnType<typeof vi.fn>
-  mockStream: ReturnType<typeof vi.fn>
-  mockClose: ReturnType<typeof vi.fn>
+  mockCreateQuery: ReturnType<typeof vi.fn>
+  mockQuery: ReturnType<typeof createMockQuery>
 } {
   const written: Array<string> = []
-  const mockSend = vi.fn(() => Promise.resolve())
-  const mockStream = vi.fn()
-  const mockClose = vi.fn()
-
-  const mockSession = {
-    sessionId: "test-session",
-    send: mockSend,
-    stream: mockStream,
-    close: mockClose,
-    [Symbol.asyncDispose]: vi.fn(() => Promise.resolve())
-  }
-
-  const mockCreateSession = vi.fn().mockReturnValue(mockSession)
+  const messages = overrides?.messages ?? [
+    { type: "result", subtype: "success" }
+  ]
+  const mockQuery = createMockQuery(messages)
+  const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
   const stdinStream = new PassThrough()
 
-  const deps: SessionDeps = {
-    createSession: mockCreateSession,
+  const deps: ShimDepsService = {
+    args: overrides?.args ?? [],
+    createQuery: mockCreateQuery,
     stdout: {
       write: vi.fn((data: string) => {
         written.push(data)
@@ -48,7 +72,7 @@ function createMockDeps(overrides?: {
     env: overrides?.env ?? { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
   }
 
-  return { deps, stdinStream, written, mockSend, mockStream, mockClose }
+  return { deps, stdinStream, written, mockCreateQuery, mockQuery }
 }
 
 describe("LineReader", () => {
@@ -115,110 +139,68 @@ describe("LineReader", () => {
   })
 })
 
-describe("createAskUserQuestionHook", () => {
+describe("createAskUserHandler", () => {
   it("reads 1 answer for single-question input", async () => {
     // Arrange
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const hook = createAskUserQuestionHook(reader, stderr)
-
-    const input = {
-      hook_event_name: "PreToolUse" as const,
-      tool_name: "AskUserQuestion",
-      tool_input: { questions: [{ question: "Pick one?", options: [] }] },
-      tool_use_id: "tu_1",
-      session_id: "s1",
-      transcript_path: "/tmp/t",
-      cwd: "/tmp"
-    }
+    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = hook(input, "tu_1", { signal: AbortSignal.timeout(5000) })
+    const promise = handler({ questions: [{ question: "Pick one?" }] })
     stream.write("Option A\n")
     const result = await promise
 
     // Assert
     expect(result).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "User answered: Option A"
-      }
+      content: [{ type: "text", text: "User answered: Option A" }]
     })
     stream.end()
   })
 
-  it("reads 2 answers for multi-question input", async () => {
+  it("reads N answers for multi-question input", async () => {
     // Arrange
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const hook = createAskUserQuestionHook(reader, stderr)
-
-    const input = {
-      hook_event_name: "PreToolUse" as const,
-      tool_name: "AskUserQuestion",
-      tool_input: {
-        questions: [
-          { question: "First?", options: [] },
-          { question: "Second?", options: [] }
-        ]
-      },
-      tool_use_id: "tu_2",
-      session_id: "s1",
-      transcript_path: "/tmp/t",
-      cwd: "/tmp"
-    }
+    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = hook(input, "tu_2", { signal: AbortSignal.timeout(5000) })
+    const promise = handler({
+      questions: [
+        { question: "First?" },
+        { question: "Second?" }
+      ]
+    })
     stream.write("Option A\n")
     stream.write("Option B\n")
     const result = await promise
 
     // Assert
     expect(result).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "User answered: Option A; Option B"
-      }
+      content: [{ type: "text", text: "User answered: Option A; Option B" }]
     })
     stream.end()
   })
 
-  it("defaults to 1 question when questions array is missing", async () => {
+  it("stops reading when stream closes", async () => {
     // Arrange
     const stream = new PassThrough()
     const reader = new LineReader(stream)
     const stderr = { write: vi.fn(() => true) }
-    const hook = createAskUserQuestionHook(reader, stderr)
-
-    const input = {
-      hook_event_name: "PreToolUse" as const,
-      tool_name: "AskUserQuestion",
-      tool_input: {},
-      tool_use_id: "tu_3",
-      session_id: "s1",
-      transcript_path: "/tmp/t",
-      cwd: "/tmp"
-    }
+    const handler = createAskUserHandler(reader, stderr)
 
     // Act
-    const promise = hook(input, "tu_3", { signal: AbortSignal.timeout(5000) })
-    stream.write("My answer\n")
+    const promise = handler({ questions: [{ question: "Q1?" }, { question: "Q2?" }] })
+    stream.write("Only one\n")
+    stream.end()
     const result = await promise
 
     // Assert
     expect(result).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "User answered: My answer"
-      }
+      content: [{ type: "text", text: "User answered: Only one" }]
     })
-    stream.end()
   })
 })
 
@@ -295,183 +277,123 @@ describe("parseArgs", () => {
   })
 })
 
-describe("run", () => {
-  it("creates session with correct options including hooks", async () => {
-    // Arrange
-    const { deps, mockStream, stdinStream } = createMockDeps()
-    mockStream.mockReturnValue(asyncGen([
-      { type: "result", subtype: "success" }
-    ]))
+describe("shimProgram", () => {
+  it.effect("creates query with MCP server and disallowed tools", () => {
+    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+      args: ["--dangerously-skip-permissions", "Plan this"]
+    })
     stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
 
-    // Act
-    await run(["--dangerously-skip-permissions", "Plan this"], deps)
-
-    // Assert
-    expect(deps.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "claude-sonnet-4-6",
-        pathToClaudeCodeExecutable: "/usr/local/bin/claude",
-        permissionMode: "bypassPermissions",
-        hooks: {
-          PreToolUse: [expect.objectContaining({
-            matcher: "AskUserQuestion",
-            timeout: 300
-          })]
-        }
-      })
-    )
+      // Assert
+      expect(mockCreateQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "Plan this",
+          options: expect.objectContaining({
+            model: "claude-sonnet-4-6",
+            pathToClaudeCodeExecutable: "/usr/local/bin/claude",
+            permissionMode: "bypassPermissions",
+            disallowedTools: ["AskUserQuestion"],
+            mcpServers: expect.objectContaining({
+              "ask-user": expect.objectContaining({ type: "sdk", name: "ask-user" })
+            })
+          })
+        })
+      )
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it("uses model from --model arg over env var", async () => {
-    // Arrange
-    const { deps, mockStream, stdinStream } = createMockDeps({
+  it.effect("uses model from --model arg over env var", () => {
+    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+      args: ["--model", "claude-opus-4-6", "Hello"],
       env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
     })
-    mockStream.mockReturnValue(asyncGen([
-      { type: "result", subtype: "success" }
-    ]))
     stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
 
-    // Act
-    await run(["--model", "claude-opus-4-6", "Hello"], deps)
-
-    // Assert
-    expect(deps.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "claude-opus-4-6" })
-    )
+      // Assert
+      expect(mockCreateQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.objectContaining({ model: "claude-opus-4-6" })
+        })
+      )
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it("uses CLAUDE_MODEL env var when no --model arg", async () => {
-    // Arrange
-    const { deps, mockStream, stdinStream } = createMockDeps({
+  it.effect("uses CLAUDE_MODEL env var when no --model arg", () => {
+    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+      args: ["Hello"],
       env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
     })
-    mockStream.mockReturnValue(asyncGen([
-      { type: "result", subtype: "success" }
-    ]))
     stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
 
-    // Act
-    await run(["Hello"], deps)
-
-    // Assert
-    expect(deps.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "claude-haiku-4-5" })
-    )
+      // Assert
+      expect(mockCreateQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.objectContaining({ model: "claude-haiku-4-5" })
+        })
+      )
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it("sends initial prompt and streams NDJSON to stdout", async () => {
-    // Arrange
-    const { deps, mockSend, mockStream, stdinStream, written } = createMockDeps()
+  it.effect("streams NDJSON to stdout and stops on result", () => {
     const messages = [
       { type: "system", subtype: "init", session_id: "s1" },
       { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
       { type: "result", subtype: "success" }
     ]
-    mockStream.mockReturnValue(asyncGen(messages))
+    const { deps, stdinStream, written } = createMockDeps({
+      args: ["Do something"],
+      messages
+    })
     stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
 
-    // Act
-    await run(["Do something"], deps)
-
-    // Assert
-    expect(mockSend).toHaveBeenCalledWith("Do something")
-    expect(written).toHaveLength(3)
-    expect(JSON.parse(written[0]!)).toEqual(messages[0])
-    expect(JSON.parse(written[1]!)).toEqual(messages[1])
-    expect(JSON.parse(written[2]!)).toEqual(messages[2])
+      // Assert
+      expect(written).toHaveLength(3)
+      expect(JSON.parse(written[0]!)).toEqual(messages[0])
+      expect(JSON.parse(written[1]!)).toEqual(messages[1])
+      expect(JSON.parse(written[2]!)).toEqual(messages[2])
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it("handles multi-turn via stdin", async () => {
-    // Arrange
-    const { deps, mockSend, mockStream, stdinStream, written } = createMockDeps()
-    stdinStream.write("my answer\n")
+  it.effect("closes query via finalizer", () => {
+    const { deps, mockQuery, stdinStream } = createMockDeps({
+      args: ["Hello"]
+    })
     stdinStream.end()
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
 
-    mockStream
-      .mockReturnValueOnce(asyncGen([
-        { type: "assistant", message: { content: [{ type: "text", text: "What is your name?" }] } }
-      ]))
-      .mockReturnValueOnce(asyncGen([
-        { type: "assistant", message: { content: [{ type: "text", text: "Hello, my answer" }] } },
-        { type: "result", subtype: "success" }
-      ]))
-
-    // Act
-    await run(["Start planning"], deps)
-
-    // Assert
-    expect(mockSend).toHaveBeenCalledTimes(2)
-    expect(mockSend).toHaveBeenNthCalledWith(1, "Start planning")
-    expect(mockSend).toHaveBeenNthCalledWith(2, "my answer")
-    expect(written).toHaveLength(3)
+      // Assert
+      expect(mockQuery.close).toHaveBeenCalledTimes(1)
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it("closes session after completion", async () => {
-    // Arrange
-    const { deps, mockClose, mockStream, stdinStream } = createMockDeps()
-    mockStream.mockReturnValue(asyncGen([
-      { type: "result", subtype: "success" }
-    ]))
-    stdinStream.end()
+  it.effect("fails with ShimError when REAL_CLAUDE_PATH is not set", () => {
+    const { deps } = createMockDeps({ args: ["Hello"], env: {} })
+    return Effect.gen(function*() {
+      // Act
+      const result = yield* shimProgram.pipe(Effect.either)
 
-    // Act
-    await run(["Hello"], deps)
-
-    // Assert
-    expect(mockClose).toHaveBeenCalledTimes(1)
-  })
-
-  it("throws when REAL_CLAUDE_PATH is not set", async () => {
-    // Arrange
-    const { deps, stdinStream } = createMockDeps({ env: {} })
-    stdinStream.end()
-
-    // Act & Assert
-    await expect(run(["Hello"], deps)).rejects.toThrow("REAL_CLAUDE_PATH not set")
-    expect(deps.stderr.write).toHaveBeenCalledWith(
-      "Error: REAL_CLAUDE_PATH environment variable is required\n"
-    )
-  })
-
-  it("closes session even when streaming errors", async () => {
-    // Arrange
-    const { deps, mockClose, mockStream, stdinStream } = createMockDeps()
-    const failingIterable = {
-      [Symbol.asyncIterator]: () => ({
-        next: () => Promise.reject(new Error("stream failed"))
-      })
-    }
-    mockStream.mockReturnValue(failingIterable)
-    stdinStream.end()
-
-    // Act & Assert
-    await expect(run(["Hello"], deps)).rejects.toThrow("stream failed")
-    expect(mockClose).toHaveBeenCalledTimes(1)
-  })
-
-  it("skips empty stdin lines", async () => {
-    // Arrange
-    const { deps, mockSend, mockStream, stdinStream } = createMockDeps()
-    stdinStream.write("\n")
-    stdinStream.write("  \n")
-    stdinStream.write("real answer\n")
-    stdinStream.end()
-
-    mockStream
-      .mockReturnValueOnce(asyncGen([
-        { type: "assistant", message: { content: [{ type: "text", text: "Question?" }] } }
-      ]))
-      .mockReturnValueOnce(asyncGen([
-        { type: "result", subtype: "success" }
-      ]))
-
-    // Act
-    await run(["Hello"], deps)
-
-    // Assert
-    expect(mockSend).toHaveBeenCalledTimes(2)
-    expect(mockSend).toHaveBeenNthCalledWith(2, "real answer")
+      // Assert
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left).toMatchObject({
+          _tag: "ShimError",
+          message: "REAL_CLAUDE_PATH not set"
+        })
+      }
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 })

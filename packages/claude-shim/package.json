@@ -5,7 +5,7 @@
   "license": "MIT",
   "description": "SDK-based claude binary replacement for stream-json NDJSON output",
   "bin": {
-    "claude-shim": "./dist/main.js"
+    "claude-shim": "./dist/bin.js"
   },
   "exports": {
     ".": {
@@ -18,6 +18,12 @@
     "check": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "latest"
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "effect": "latest",
+    "@effect/platform-node": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@effect/vitest": "latest"
   }
 }

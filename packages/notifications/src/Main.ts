@@ -82,7 +82,7 @@ const lalphNotifyCommand = CliCommand.make(
           // Resolve the SDK-based shim entry point via package resolution
           const require = createRequire(import.meta.url)
           const shimPkgDir = pathService.dirname(require.resolve("@template/claude-shim/package.json"))
-          const shimMainTs = pathService.join(shimPkgDir, "src", "main.ts")
+          const shimMainTs = pathService.join(shimPkgDir, "src", "bin.ts")
 
           yield* Effect.log("Resolved shim paths").pipe(
             Effect.annotateLogs({ realClaudePath, tsxPath, shimMainTs })
