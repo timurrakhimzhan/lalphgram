@@ -1,0 +1,298 @@
+import { PassThrough } from "node:stream"
+import { describe, expect, it, vi } from "vitest"
+import type { SessionDeps } from "../src/main.js"
+import { parseArgs, run } from "../src/main.js"
+
+async function* asyncGen<T>(items: ReadonlyArray<T>): AsyncGenerator<T, void> {
+  for (const item of items) {
+    yield item
+  }
+}
+
+function createMockDeps(overrides?: {
+  readonly env?: Record<string, string | undefined>
+}): {
+  deps: SessionDeps
+  stdinStream: PassThrough
+  written: Array<string>
+  mockSend: ReturnType<typeof vi.fn>
+  mockStream: ReturnType<typeof vi.fn>
+  mockClose: ReturnType<typeof vi.fn>
+} {
+  const written: Array<string> = []
+  const mockSend = vi.fn(() => Promise.resolve())
+  const mockStream = vi.fn()
+  const mockClose = vi.fn()
+
+  const mockSession = {
+    sessionId: "test-session",
+    send: mockSend,
+    stream: mockStream,
+    close: mockClose,
+    [Symbol.asyncDispose]: vi.fn(() => Promise.resolve())
+  }
+
+  const mockCreateSession = vi.fn().mockReturnValue(mockSession)
+  const stdinStream = new PassThrough()
+
+  const deps: SessionDeps = {
+    createSession: mockCreateSession,
+    stdout: {
+      write: vi.fn((data: string) => {
+        written.push(data)
+        return true
+      })
+    },
+    stderr: { write: vi.fn(() => true) },
+    stdin: stdinStream,
+    env: overrides?.env ?? { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
+  }
+
+  return { deps, stdinStream, written, mockSend, mockStream, mockClose }
+}
+
+describe("parseArgs", () => {
+  it("extracts positional prompt", () => {
+    // Arrange
+    const args = ["Hello world"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.prompt).toBe("Hello world")
+    expect(result.dangerouslySkipPermissions).toBe(false)
+    expect(result.model).toBeNull()
+  })
+
+  it("detects --dangerously-skip-permissions", () => {
+    // Arrange
+    const args = ["--dangerously-skip-permissions", "Do something"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.dangerouslySkipPermissions).toBe(true)
+    expect(result.prompt).toBe("Do something")
+  })
+
+  it("extracts --model value", () => {
+    // Arrange
+    const args = ["--model", "claude-opus-4-6", "Hello"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.model).toBe("claude-opus-4-6")
+    expect(result.prompt).toBe("Hello")
+  })
+
+  it("skips --output-format and its value", () => {
+    // Arrange
+    const args = ["--output-format", "stream-json", "Hello"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.prompt).toBe("Hello")
+  })
+
+  it("skips -p, --print, and --verbose flags", () => {
+    // Arrange
+    const args = ["-p", "--verbose", "--print", "Hello"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.prompt).toBe("Hello")
+  })
+
+  it("handles -- separator for prompt", () => {
+    // Arrange
+    const args = ["--dangerously-skip-permissions", "--", "prompt", "text", "here"]
+
+    // Act
+    const result = parseArgs(args)
+
+    // Assert
+    expect(result.prompt).toBe("prompt text here")
+    expect(result.dangerouslySkipPermissions).toBe(true)
+  })
+})
+
+describe("run", () => {
+  it("creates session with correct options", async () => {
+    // Arrange
+    const { deps, mockStream, stdinStream } = createMockDeps()
+    mockStream.mockReturnValue(asyncGen([
+      { type: "result", subtype: "success" }
+    ]))
+    stdinStream.end()
+
+    // Act
+    await run(["--dangerously-skip-permissions", "Plan this"], deps)
+
+    // Assert
+    expect(deps.createSession).toHaveBeenCalledWith({
+      model: "claude-sonnet-4-6",
+      pathToClaudeCodeExecutable: "/usr/local/bin/claude",
+      permissionMode: "bypassPermissions"
+    })
+  })
+
+  it("uses model from --model arg over env var", async () => {
+    // Arrange
+    const { deps, mockStream, stdinStream } = createMockDeps({
+      env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
+    })
+    mockStream.mockReturnValue(asyncGen([
+      { type: "result", subtype: "success" }
+    ]))
+    stdinStream.end()
+
+    // Act
+    await run(["--model", "claude-opus-4-6", "Hello"], deps)
+
+    // Assert
+    expect(deps.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-opus-4-6" })
+    )
+  })
+
+  it("uses CLAUDE_MODEL env var when no --model arg", async () => {
+    // Arrange
+    const { deps, mockStream, stdinStream } = createMockDeps({
+      env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
+    })
+    mockStream.mockReturnValue(asyncGen([
+      { type: "result", subtype: "success" }
+    ]))
+    stdinStream.end()
+
+    // Act
+    await run(["Hello"], deps)
+
+    // Assert
+    expect(deps.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-haiku-4-5" })
+    )
+  })
+
+  it("sends initial prompt and streams NDJSON to stdout", async () => {
+    // Arrange
+    const { deps, mockSend, mockStream, stdinStream, written } = createMockDeps()
+    const messages = [
+      { type: "system", subtype: "init", session_id: "s1" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
+      { type: "result", subtype: "success" }
+    ]
+    mockStream.mockReturnValue(asyncGen(messages))
+    stdinStream.end()
+
+    // Act
+    await run(["Do something"], deps)
+
+    // Assert
+    expect(mockSend).toHaveBeenCalledWith("Do something")
+    expect(written).toHaveLength(3)
+    expect(JSON.parse(written[0]!)).toEqual(messages[0])
+    expect(JSON.parse(written[1]!)).toEqual(messages[1])
+    expect(JSON.parse(written[2]!)).toEqual(messages[2])
+  })
+
+  it("handles multi-turn via stdin", async () => {
+    // Arrange
+    const { deps, mockSend, mockStream, stdinStream, written } = createMockDeps()
+    stdinStream.write("my answer\n")
+    stdinStream.end()
+
+    mockStream
+      .mockReturnValueOnce(asyncGen([
+        { type: "assistant", message: { content: [{ type: "text", text: "What is your name?" }] } }
+      ]))
+      .mockReturnValueOnce(asyncGen([
+        { type: "assistant", message: { content: [{ type: "text", text: "Hello, my answer" }] } },
+        { type: "result", subtype: "success" }
+      ]))
+
+    // Act
+    await run(["Start planning"], deps)
+
+    // Assert
+    expect(mockSend).toHaveBeenCalledTimes(2)
+    expect(mockSend).toHaveBeenNthCalledWith(1, "Start planning")
+    expect(mockSend).toHaveBeenNthCalledWith(2, "my answer")
+    expect(written).toHaveLength(3)
+  })
+
+  it("closes session after completion", async () => {
+    // Arrange
+    const { deps, mockClose, mockStream, stdinStream } = createMockDeps()
+    mockStream.mockReturnValue(asyncGen([
+      { type: "result", subtype: "success" }
+    ]))
+    stdinStream.end()
+
+    // Act
+    await run(["Hello"], deps)
+
+    // Assert
+    expect(mockClose).toHaveBeenCalledTimes(1)
+  })
+
+  it("throws when REAL_CLAUDE_PATH is not set", async () => {
+    // Arrange
+    const { deps, stdinStream } = createMockDeps({ env: {} })
+    stdinStream.end()
+
+    // Act & Assert
+    await expect(run(["Hello"], deps)).rejects.toThrow("REAL_CLAUDE_PATH not set")
+    expect(deps.stderr.write).toHaveBeenCalledWith(
+      "Error: REAL_CLAUDE_PATH environment variable is required\n"
+    )
+  })
+
+  it("closes session even when streaming errors", async () => {
+    // Arrange
+    const { deps, mockClose, mockStream, stdinStream } = createMockDeps()
+    const failingIterable = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new Error("stream failed"))
+      })
+    }
+    mockStream.mockReturnValue(failingIterable)
+    stdinStream.end()
+
+    // Act & Assert
+    await expect(run(["Hello"], deps)).rejects.toThrow("stream failed")
+    expect(mockClose).toHaveBeenCalledTimes(1)
+  })
+
+  it("skips empty stdin lines", async () => {
+    // Arrange
+    const { deps, mockSend, mockStream, stdinStream } = createMockDeps()
+    stdinStream.write("\n")
+    stdinStream.write("  \n")
+    stdinStream.write("real answer\n")
+    stdinStream.end()
+
+    mockStream
+      .mockReturnValueOnce(asyncGen([
+        { type: "assistant", message: { content: [{ type: "text", text: "Question?" }] } }
+      ]))
+      .mockReturnValueOnce(asyncGen([
+        { type: "result", subtype: "success" }
+      ]))
+
+    // Act
+    await run(["Hello"], deps)
+
+    // Assert
+    expect(mockSend).toHaveBeenCalledTimes(2)
+    expect(mockSend).toHaveBeenNthCalledWith(2, "real answer")
+  })
+})

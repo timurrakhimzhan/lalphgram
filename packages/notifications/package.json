@@ -33,7 +33,8 @@
     "@effect/cli": "latest",
     "@linear/sdk": "latest",
     "octokit": "latest",
-    "telegraf": "latest"
+    "telegraf": "latest",
+    "@template/claude-shim": "workspace:*"
   },
   "effect": {
     "generateExports": {

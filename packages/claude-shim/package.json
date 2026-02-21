@@ -1,0 +1,23 @@
+{
+  "name": "@template/claude-shim",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "SDK-based claude binary replacement for stream-json NDJSON output",
+  "bin": {
+    "claude-shim": "./dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./src/main.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "check": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest"
+  }
+}

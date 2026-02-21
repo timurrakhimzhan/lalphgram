@@ -6,6 +6,7 @@ import { Command as CliCommand, Options, Prompt } from "@effect/cli"
 import { Command as PlatformCommand, FileSystem, Path } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
+import { createRequire } from "node:module"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
 import { AppRuntimeConfig, RuntimeConfig } from "./services/AppRuntimeConfig.js"
 import { MainLayer, runEventLoop } from "./services/EventLoop.js"
@@ -71,22 +72,36 @@ const lalphNotifyCommand = CliCommand.make(
             PlatformCommand.string,
             Effect.map((s) => s.trim())
           )
-          yield* Effect.log("Resolved real claude path").pipe(
-            Effect.annotateLogs({ realClaudePath })
+
+          // Resolve tsx binary for running the TypeScript shim
+          const tsxPath = yield* PlatformCommand.make("which", "tsx").pipe(
+            PlatformCommand.string,
+            Effect.map((s) => s.trim())
           )
 
-          // Create shim directory and script
+          // Resolve the SDK-based shim entry point via package resolution
+          const require = createRequire(import.meta.url)
+          const shimPkgDir = pathService.dirname(require.resolve("@template/claude-shim/package.json"))
+          const shimMainTs = pathService.join(shimPkgDir, "src", "main.ts")
+
+          yield* Effect.log("Resolved shim paths").pipe(
+            Effect.annotateLogs({ realClaudePath, tsxPath, shimMainTs })
+          )
+
+          // Create shim directory and script that delegates to the SDK-based shim
           const shimDir = pathService.join(appContext.configDir, "bin")
           yield* fs.makeDirectory(shimDir, { recursive: true })
 
           const shimPath = pathService.join(shimDir, "claude")
           const shimScript = [
             "#!/bin/bash",
-            `exec ${JSON.stringify(realClaudePath)} --output-format stream-json --verbose "$@"`
+            `REAL_CLAUDE_PATH=${JSON.stringify(realClaudePath)} exec ${JSON.stringify(tsxPath)} ${
+              JSON.stringify(shimMainTs)
+            } "$@"`
           ].join("\n")
           yield* fs.writeFileString(shimPath, shimScript)
           yield* fs.chmod(shimPath, 0o755)
-          yield* Effect.log("Claude shim created").pipe(
+          yield* Effect.log("Claude SDK shim created").pipe(
             Effect.annotateLogs({ shimPath })
           )
 

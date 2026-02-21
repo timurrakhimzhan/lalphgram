@@ -23,6 +23,7 @@ export const ContentBlock = Schema.Struct({
 export class StreamJsonMessage extends Schema.Class<StreamJsonMessage>("StreamJsonMessage")({
   type: Schema.String,
   subtype: Schema.optional(Schema.String),
+  session_id: Schema.optional(Schema.String),
   message: Schema.optional(
     Schema.Struct({
       content: Schema.optional(Schema.Array(ContentBlock))
