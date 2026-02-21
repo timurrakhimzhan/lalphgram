@@ -210,6 +210,41 @@ function getFollowUpText(value: unknown): string | null {
   return null
 }
 
+export function getShimControlType(line: string): string | null {
+  if (line.trim().length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(line)
+    if (typeof parsed !== "object" || parsed === null) return null
+    if (!("type" in parsed)) return null
+    const { type } = Object.fromEntries(Object.entries(parsed))
+    if (type === "shim_start" || type === "shim_abort") return type
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function parseShimControl(
+  line: string
+): { readonly type: "shim_start" | "shim_abort"; readonly text?: string } | null {
+  if (line.trim().length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(line)
+    if (typeof parsed !== "object" || parsed === null) return null
+    if (!("type" in parsed)) return null
+    const entries = Object.fromEntries(Object.entries(parsed))
+    if (entries["type"] === "shim_start") {
+      return typeof entries["text"] === "string"
+        ? { type: "shim_start", text: entries["text"] }
+        : { type: "shim_start" }
+    }
+    if (entries["type"] === "shim_abort") return { type: "shim_abort" }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export const shimProgram = Effect.gen(function*() {
   const deps = yield* ShimDeps
   const parsed = parseArgs(deps.args)
@@ -223,6 +258,21 @@ export const shimProgram = Effect.gen(function*() {
   const model = parsed.model ?? deps.env["CLAUDE_MODEL"] ?? "claude-sonnet-4-6"
   const lineReader = new LineReader(deps.stdin)
   const mcpServer = createAskUserMcpServer(lineReader, deps.stderr)
+
+  // Handshake: signal readiness and wait for control message
+  deps.stdout.write(JSON.stringify({ type: "shim_ready" }) + "\n")
+  const controlLine = yield* Effect.tryPromise({
+    try: () => lineReader.nextLine(),
+    catch: (err) => new ShimError({ message: "Failed to read control line", cause: err })
+  })
+  const controlType = getShimControlType(controlLine)
+  if (controlType === "shim_abort") return
+  if (controlType !== "shim_start") {
+    return yield* new ShimError({
+      message: `Unexpected control message: ${controlLine}`,
+      cause: null
+    })
+  }
 
   const q: Query = deps.createQuery({
     prompt: parsed.prompt,
@@ -244,16 +294,40 @@ export const shimProgram = Effect.gen(function*() {
 
   lineReader.interceptor = (line) => {
     try {
-      const text = getFollowUpText(JSON.parse(line))
-      if (text === null) return false
-      deps.stderr.write(`claude-shim: follow_up intercepted: ${text.slice(0, 100)}\n`)
-      followUpQueue.offer({
-        type: "user",
-        message: { role: "user", content: text },
-        parent_tool_use_id: null,
-        session_id: sessionId
-      })
-      return true
+      const parsed: unknown = JSON.parse(line)
+
+      // Handle follow_up — queue stays open for more messages
+      const followUpText = getFollowUpText(parsed)
+      if (followUpText !== null) {
+        deps.stderr.write(`claude-shim: follow_up intercepted: ${followUpText.slice(0, 100)}\n`)
+        followUpQueue.offer({
+          type: "user",
+          message: { role: "user", content: followUpText },
+          parent_tool_use_id: null,
+          session_id: sessionId
+        })
+        return true
+      }
+
+      // Handle post-handshake control messages (shim_start / shim_abort)
+      const control = parseShimControl(line)
+      if (control !== null) {
+        if (control.type === "shim_start") {
+          const approveText = control.text ?? "The user has approved. Proceed with implementation."
+          deps.stderr.write("claude-shim: shim_start intercepted\n")
+          followUpQueue.offer({
+            type: "user",
+            message: { role: "user", content: approveText },
+            parent_tool_use_id: null,
+            session_id: sessionId
+          })
+          followUpQueue.close()
+        } else {
+          deps.stderr.write("claude-shim: shim_abort intercepted\n")
+          followUpQueue.close()
+        }
+        return true
+      }
     } catch {
       // not JSON — pass through to collectAnswers
     }
@@ -279,7 +353,6 @@ export const shimProgram = Effect.gen(function*() {
         deps.stdout.write(JSON.stringify(msg) + "\n")
       })
     ),
-    Stream.takeUntil((msg: SDKMessage) => msg.type === "result"),
     Stream.runDrain
   )
 }).pipe(Effect.scoped)
