@@ -15,7 +15,8 @@
     "dev:notifications": "pnpm --filter @template/notifications dev",
     "start:notifications": "pnpm --filter @template/notifications start",
     "test": "vitest",
-    "coverage": "vitest --coverage"
+    "coverage": "vitest --coverage",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@babel/cli": "^7.28.6",
@@ -41,9 +42,14 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "eslint-plugin-sort-destructure-keys": "^2.0.0",
     "glob": "^11.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{ts,mjs}": "eslint --fix"
   },
   "pnpm": {
     "patchedDependencies": {},
