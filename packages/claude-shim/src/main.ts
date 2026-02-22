@@ -274,8 +274,18 @@ export const shimProgram = Effect.gen(function*() {
     })
   }
 
+  const followUpQueue = new FollowUpQueue()
+  let sessionId = ""
+
+  followUpQueue.offer({
+    type: "user",
+    message: { role: "user", content: parsed.prompt },
+    parent_tool_use_id: null,
+    session_id: ""
+  })
+
   const q: Query = deps.createQuery({
-    prompt: parsed.prompt,
+    prompt: followUpQueue,
     options: {
       model,
       pathToClaudeCodeExecutable: realClaudePath,
@@ -288,9 +298,6 @@ export const shimProgram = Effect.gen(function*() {
   })
 
   yield* Effect.addFinalizer(() => Effect.sync(() => q.close()))
-
-  const followUpQueue = new FollowUpQueue()
-  let sessionId = ""
 
   lineReader.interceptor = (line) => {
     try {
@@ -333,14 +340,6 @@ export const shimProgram = Effect.gen(function*() {
     }
     return false
   }
-
-  yield* Effect.tryPromise({
-    try: () => q.streamInput(followUpQueue),
-    catch: (err) => new ShimError({ message: "streamInput error", cause: err })
-  }).pipe(
-    Effect.catchAll((err) => Effect.logError(`streamInput error: ${String(err)}`)),
-    Effect.forkScoped
-  )
 
   yield* Effect.addFinalizer(() => Effect.sync(() => followUpQueue.close()))
 

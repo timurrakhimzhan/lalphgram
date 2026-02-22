@@ -249,7 +249,7 @@ export const PlanSessionLive = Layer.scoped(
                 const alreadyEmitted = yield* Ref.getAndSet(specReadyEmitted, true)
                 if (!alreadyEmitted) {
                   yield* Effect.log("Planner result received, emitting PlanSpecReady")
-                  yield* Queue.offer(eventQueue, new PlanSpecReady())
+                  yield* Queue.offer(eventQueue, new PlanSpecReady({}))
                 }
                 return
               }

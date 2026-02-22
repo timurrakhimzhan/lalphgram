@@ -101,7 +101,6 @@ const formatTelegramHtml = (text: string) =>
 export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
 export const APPROVE_BUTTON_LABEL = "Approve"
-export const REJECT_BUTTON_LABEL = "Reject"
 
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
@@ -250,15 +249,6 @@ export const runEventLoop = Effect.gen(function*() {
           )
           return
         }
-        if (msg.text === REJECT_BUTTON_LABEL) {
-          yield* Effect.log("User rejected task creation")
-          yield* planSession.reject.pipe(
-            Effect.tapError((err) => Effect.logError(`Plan reject error: ${err.message}`)),
-            Effect.orElseSucceed(() => undefined)
-          )
-          yield* notifier.sendMessage("Plan rejected.")
-          return
-        }
         const pending = yield* Ref.get(pendingAnswerCount)
         if (pending > 0) {
           yield* Effect.log("Forwarding answer to plan session")
@@ -270,6 +260,7 @@ export const runEventLoop = Effect.gen(function*() {
         } else {
           yield* Effect.log("Sending follow-up to plan session")
           yield* planSession.sendFollowUp(msg.text).pipe(
+            Effect.tap(() => notifier.sendMessage("Message received — Claude will process it shortly.")),
             Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
             Effect.orElseSucceed(() => undefined)
           )
@@ -303,8 +294,8 @@ export const runEventLoop = Effect.gen(function*() {
           })),
         Match.tag("PlanSpecReady", () =>
           notifier.sendMessage({
-            text: "Spec ready. Review the output above, then approve to create tasks.",
-            replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: REJECT_BUTTON_LABEL }]
+            text: "Spec ready. Reply with questions or approve to proceed.",
+            replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }]
           })),
         Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
         Match.tag("PlanFailed", (e) => notifier.sendMessage(`Plan failed: ${e.message}`)),

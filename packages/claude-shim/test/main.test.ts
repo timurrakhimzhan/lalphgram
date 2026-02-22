@@ -16,6 +16,24 @@ import {
 const SHIM_START_LINE = JSON.stringify({ type: "shim_start" }) + "\n"
 const SHIM_ABORT_LINE = JSON.stringify({ type: "shim_abort" }) + "\n"
 
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value
+}
+
+const collectPromptMessages = (mockCreateQuery: ReturnType<typeof vi.fn>) =>
+  Effect.tryPromise({
+    try: async () => {
+      const callArg: unknown = mockCreateQuery.mock.calls[0]?.[0]
+      if (typeof callArg !== "object" || callArg === null || !("prompt" in callArg)) return []
+      const { prompt } = callArg
+      if (!isAsyncIterable(prompt)) return []
+      const msgs: Array<unknown> = []
+      for await (const msg of prompt) msgs.push(msg)
+      return msgs
+    },
+    catch: () => new Error("Failed to collect prompt messages")
+  })
+
 function createMockQuery(messages: ReadonlyArray<Record<string, unknown>>) {
   const gen = (async function*() {
     for (const m of messages) yield m
@@ -85,8 +103,7 @@ function createMockDeps(overrides?: {
 }
 
 function createCustomMockQuery(
-  gen: AsyncGenerator<Record<string, unknown>>,
-  streamInputFn?: (stream: AsyncIterable<unknown>) => Promise<void>
+  gen: AsyncGenerator<Record<string, unknown>>
 ) {
   return Object.assign(gen, {
     close: vi.fn(),
@@ -103,7 +120,7 @@ function createCustomMockQuery(
     reconnectMcpServer: vi.fn(() => Promise.resolve()),
     toggleMcpServer: vi.fn(() => Promise.resolve()),
     setMcpServers: vi.fn(() => Promise.resolve({})),
-    streamInput: vi.fn(streamInputFn ?? (() => Promise.resolve())),
+    streamInput: vi.fn(() => Promise.resolve()),
     stopTask: vi.fn(() => Promise.resolve()),
     return: gen.return.bind(gen),
     throw: gen.throw.bind(gen),
@@ -443,7 +460,7 @@ describe("shimProgram", () => {
       // Assert
       expect(mockCreateQuery).toHaveBeenCalledWith(
         expect.objectContaining({
-          prompt: "Plan this",
+          prompt: expect.any(FollowUpQueue),
           options: expect.objectContaining({
             model: "claude-sonnet-4-6",
             pathToClaudeCodeExecutable: "/usr/local/bin/claude",
@@ -551,8 +568,8 @@ describe("shimProgram", () => {
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it.effect("calls streamInput with follow-up queue", () => {
-    const { deps, mockQuery, stdinStream } = createMockDeps({
+  it.effect("passes initial prompt as first message in prompt iterable", () => {
+    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
       args: ["Do something"]
     })
     stdinStream.end()
@@ -561,12 +578,17 @@ describe("shimProgram", () => {
       yield* shimProgram
 
       // Assert
-      expect(mockQuery.streamInput).toHaveBeenCalledTimes(1)
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Do something" },
+        session_id: ""
+      })
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it.effect("routes follow_up JSON lines to streamInput instead of collectAnswers", () => {
-    const offered: Array<unknown> = []
+  it.effect("routes follow_up JSON lines to prompt iterable instead of collectAnswers", () => {
     const stdinStream = new PassThrough()
     // Pre-write shim_start so the handshake completes
     stdinStream.write(SHIM_START_LINE)
@@ -580,32 +602,7 @@ describe("shimProgram", () => {
       stdinStream.end()
       yield { type: "result", subtype: "success" }
     })()
-    const mockQuery = Object.assign(gen, {
-      close: vi.fn(),
-      interrupt: vi.fn(() => Promise.resolve()),
-      setPermissionMode: vi.fn(() => Promise.resolve()),
-      setModel: vi.fn(() => Promise.resolve()),
-      setMaxThinkingTokens: vi.fn(() => Promise.resolve()),
-      initializationResult: vi.fn(() => Promise.resolve({})),
-      supportedCommands: vi.fn(() => Promise.resolve([])),
-      supportedModels: vi.fn(() => Promise.resolve([])),
-      mcpServerStatus: vi.fn(() => Promise.resolve([])),
-      accountInfo: vi.fn(() => Promise.resolve({})),
-      rewindFiles: vi.fn(() => Promise.resolve({})),
-      reconnectMcpServer: vi.fn(() => Promise.resolve()),
-      toggleMcpServer: vi.fn(() => Promise.resolve()),
-      setMcpServers: vi.fn(() => Promise.resolve({})),
-      streamInput: vi.fn(async (stream: AsyncIterable<unknown>) => {
-        for await (const msg of stream) {
-          offered.push(msg)
-        }
-      }),
-      stopTask: vi.fn(() => Promise.resolve()),
-      return: gen.return.bind(gen),
-      throw: gen.throw.bind(gen),
-      next: gen.next.bind(gen),
-      [Symbol.asyncIterator]: () => gen
-    })
+    const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
     const deps: ShimDepsService = {
       args: ["Do something"],
@@ -621,8 +618,14 @@ describe("shimProgram", () => {
       yield* shimProgram
 
       // Assert
-      expect(offered).toHaveLength(1)
-      expect(offered[0]).toMatchObject({
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Do something" },
+        session_id: ""
+      })
+      expect(messages[1]).toMatchObject({
         type: "user",
         message: { role: "user", content: "also consider X" },
         parent_tool_use_id: null,
@@ -833,7 +836,6 @@ describe("shimProgram post-handshake control", () => {
 
   it.effect("offers approve text and closes queue on post-handshake shim_start", () => {
     // Arrange
-    const offered: Array<unknown> = []
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
 
@@ -844,9 +846,7 @@ describe("shimProgram post-handshake control", () => {
       await delay(50)
     })()
 
-    const mockQuery = createCustomMockQuery(gen, async (stream) => {
-      for await (const msg of stream) offered.push(msg)
-    })
+    const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
     const deps: ShimDepsService = {
       args: ["Plan this"],
@@ -862,8 +862,14 @@ describe("shimProgram post-handshake control", () => {
       yield* shimProgram
 
       // Assert
-      expect(offered).toHaveLength(1)
-      expect(offered[0]).toMatchObject({
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Plan this" },
+        session_id: ""
+      })
+      expect(messages[1]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Approved! Build it." },
         session_id: "test-session"
@@ -873,7 +879,6 @@ describe("shimProgram post-handshake control", () => {
 
   it.effect("uses default approve text when shim_start has no text field", () => {
     // Arrange
-    const offered: Array<unknown> = []
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
 
@@ -884,9 +889,7 @@ describe("shimProgram post-handshake control", () => {
       await delay(50)
     })()
 
-    const mockQuery = createCustomMockQuery(gen, async (stream) => {
-      for await (const msg of stream) offered.push(msg)
-    })
+    const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
     const deps: ShimDepsService = {
       args: ["Plan this"],
@@ -902,8 +905,14 @@ describe("shimProgram post-handshake control", () => {
       yield* shimProgram
 
       // Assert
-      expect(offered).toHaveLength(1)
-      expect(offered[0]).toMatchObject({
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Plan this" },
+        session_id: ""
+      })
+      expect(messages[1]).toMatchObject({
         type: "user",
         message: { role: "user", content: "The user has approved. Proceed with implementation." },
         session_id: "test-session"
@@ -913,7 +922,6 @@ describe("shimProgram post-handshake control", () => {
 
   it.effect("closes queue without offering on post-handshake shim_abort", () => {
     // Arrange
-    const offered: Array<unknown> = []
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
 
@@ -924,9 +932,7 @@ describe("shimProgram post-handshake control", () => {
       await delay(50)
     })()
 
-    const mockQuery = createCustomMockQuery(gen, async (stream) => {
-      for await (const msg of stream) offered.push(msg)
-    })
+    const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
     const deps: ShimDepsService = {
       args: ["Plan this"],
@@ -941,14 +947,19 @@ describe("shimProgram post-handshake control", () => {
       // Act
       yield* shimProgram
 
-      // Assert
-      expect(offered).toHaveLength(0)
+      // Assert — only the initial prompt, no approve message
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Plan this" },
+        session_id: ""
+      })
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
   it.effect("handles follow_up then shim_start in sequence", () => {
     // Arrange
-    const offered: Array<unknown> = []
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
 
@@ -962,9 +973,7 @@ describe("shimProgram post-handshake control", () => {
       await delay(50)
     })()
 
-    const mockQuery = createCustomMockQuery(gen, async (stream) => {
-      for await (const msg of stream) offered.push(msg)
-    })
+    const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
     const deps: ShimDepsService = {
       args: ["Plan this"],
@@ -980,12 +989,18 @@ describe("shimProgram post-handshake control", () => {
       yield* shimProgram
 
       // Assert
-      expect(offered).toHaveLength(2)
-      expect(offered[0]).toMatchObject({
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(3)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Plan this" },
+        session_id: ""
+      })
+      expect(messages[1]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Also consider edge cases" }
       })
-      expect(offered[1]).toMatchObject({
+      expect(messages[2]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Looks good, proceed" }
       })
