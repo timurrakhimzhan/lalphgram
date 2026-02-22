@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
-import { Context, Data, Effect, Exit, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
+import { Context, Data, Effect, Exit, identity, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
 import type { ContentBlock } from "../lib/StreamJsonParser.js"
 import { AskUserQuestionInput, StreamJsonMessage } from "../lib/StreamJsonParser.js"
 import { AppContext } from "./AppContext.js"
@@ -245,16 +245,6 @@ export const PlanSessionLive = Layer.scoped(
           }
         })
 
-        const tryParseLine = (line: string) =>
-          decodeJsonMessage(line).pipe(
-            Effect.map(Option.some),
-            Effect.catchTag("ParseError", (err) =>
-              Effect.logWarning("stdout line is not valid JSON, treating as raw text").pipe(
-                Effect.annotateLogs({ rawLine: line.slice(0, 300), parseError: err.message.slice(0, 100) }),
-                Effect.map(() => Option.none<StreamJsonMessage>())
-              ))
-          )
-
         const detectFileEvent = (block: typeof ContentBlock.Type) =>
           Effect.gen(function*() {
             const filePathResult = yield* Effect.gen(function*() {
@@ -284,8 +274,7 @@ export const PlanSessionLive = Layer.scoped(
                   )
                   yield* Queue.offer(eventQueue, new PlanSpecUpdated({ filePath: fp }))
                 } else {
-                  yield* Ref.update(seenFilePaths, (s) =>
-                    new Set([...s, fp]))
+                  yield* Ref.update(seenFilePaths, (s) => new Set([...s, fp]))
                   yield* Effect.log("Spec file created").pipe(
                     Effect.annotateLogs({ filePath: fp })
                   )
@@ -374,20 +363,17 @@ export const PlanSessionLive = Layer.scoped(
           Stream.splitLines,
           Stream.filter((line) => line.trim().length > 0),
           Stream.mapEffect((line) =>
-            Effect.gen(function*() {
-              const parsed = yield* tryParseLine(line)
-              if (Option.isNone(parsed)) {
-                const cleaned = stripAnsi(line).trim()
-                if (cleaned.length > 0) {
-                  yield* Effect.logDebug("stdout raw line (not JSON), skipping").pipe(
-                    Effect.annotateLogs({ line: cleaned.slice(0, 200) })
-                  )
-                }
-                return
-              }
-              yield* routeMessage(parsed.value)
-            })
+            decodeJsonMessage(line).pipe(
+              Effect.tapError((err) =>
+                Effect.logWarning("Non-JSON stdout line, skipping").pipe(
+                  Effect.annotateLogs({ line: line.slice(0, 300), error: err.message.slice(0, 100) })
+                )
+              ),
+              Effect.option
+            )
           ),
+          Stream.filterMap(identity),
+          Stream.mapEffect(routeMessage),
           Stream.runDrain,
           Effect.tap(() => flushPendingText),
           Effect.tap(() => Effect.log("stdout stream completed")),
