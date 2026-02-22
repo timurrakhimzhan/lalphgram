@@ -21,6 +21,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
     "effect": "latest",
+    "@effect/platform": "latest",
     "@effect/platform-node": "latest",
     "zod": "latest"
   },

@@ -6,7 +6,9 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 
-import { Config, Context, Data, Effect, Either, Queue, Ref, Stream } from "effect"
+import type { PlatformError } from "@effect/platform/Error"
+import { Config, Context, Data, Effect, Either, Fiber, Queue, Ref, Stream } from "effect"
+import type * as Sink from "effect/Sink"
 import { z } from "zod/v4"
 import { parseArgs } from "./parseArgs.js"
 import { decodeShimMessage } from "./schemas.js"
@@ -40,8 +42,8 @@ export const ShimConfig = Config.all({
 export interface ShimDepsService {
   readonly args: ReadonlyArray<string>
   readonly stdin: Stream.Stream<Uint8Array>
-  readonly stdout: { readonly write: (data: string) => boolean }
-  readonly stderr: { readonly write: (data: string) => boolean }
+  readonly stdout: Sink.Sink<void, string, never, PlatformError>
+  readonly stderr: Sink.Sink<void, string, never, PlatformError>
 }
 
 export class ShimDeps extends Context.Tag("ShimDeps")<ShimDeps, ShimDepsService>() {}
@@ -58,47 +60,6 @@ const askUserQuestionSchema = {
   }))
 }
 
-export const collectAnswers = async (
-  questionCount: number,
-  answerQueue: Queue.Queue<string>,
-  closedRef: Ref.Ref<boolean>,
-  stderr: { write(data: string): boolean }
-) => {
-  stderr.write(`claude-shim: ask_user MCP tool blocking for ${questionCount} answer(s)\n`)
-  const answers: Array<string> = []
-  while (answers.length < questionCount) {
-    const line = await Effect.runPromise(Queue.take(answerQueue))
-    const trimmed = line.trim()
-    if (trimmed.length === 0) {
-      const closed = Effect.runSync(Ref.get(closedRef))
-      if (closed) break
-      continue
-    }
-    answers.push(trimmed)
-  }
-  stderr.write(`claude-shim: ask_user received: ${answers.join("; ")}\n`)
-  return {
-    content: [{ type: "text" as const, text: `User answered: ${answers.join("; ")}` }]
-  }
-}
-
-export const createAskUserMcpServer = (
-  answerQueue: Queue.Queue<string>,
-  closedRef: Ref.Ref<boolean>,
-  stderr: { write(data: string): boolean }
-) =>
-  createSdkMcpServer({
-    name: "ask-user",
-    tools: [
-      tool(
-        "ask_user",
-        "Ask the user a question and wait for their response via Telegram. Always provide 2-4 options for the user to choose from.",
-        askUserQuestionSchema,
-        (args, _extra) => collectAnswers(args.questions.length || 1, answerQueue, closedRef, stderr)
-      )
-    ]
-  })
-
 const FollowUpStop: unique symbol = Symbol.for("FollowUpStop")
 type FollowUpItem = SDKUserMessage | typeof FollowUpStop
 
@@ -110,9 +71,32 @@ export const shimProgram = Effect.gen(function*() {
 
   const model = parsed.model ?? config.claudeModel
 
+  // Output queues, drained through sinks as a single stream each
+  const outQueue = yield* Queue.unbounded<string | null>()
+  const errQueue = yield* Queue.unbounded<string | null>()
+  const outFiber = yield* Stream.fromQueue(outQueue).pipe(
+    Stream.takeWhile((s): s is string => s !== null),
+    Stream.run(deps.stdout),
+    Effect.fork
+  )
+  const errFiber = yield* Stream.fromQueue(errQueue).pipe(
+    Stream.takeWhile((s): s is string => s !== null),
+    Stream.run(deps.stderr),
+    Effect.fork
+  )
+  yield* Effect.addFinalizer(() =>
+    Queue.offer(outQueue, null).pipe(
+      Effect.andThen(Queue.offer(errQueue, null)),
+      Effect.andThen(Fiber.join(outFiber).pipe(Effect.ignore)),
+      Effect.andThen(Fiber.join(errFiber).pipe(Effect.ignore))
+    )
+  )
+  const writeStdout = (data: string) => Queue.offer(outQueue, data).pipe(Effect.asVoid)
+  const writeDebug = (msg: string) =>
+    Queue.offer(errQueue, JSON.stringify({ type: "debug", message: msg }) + "\n").pipe(Effect.asVoid)
+
   // State refs
   const answerQueue = yield* Queue.unbounded<string>()
-  const closedRef = yield* Ref.make(false)
   const routingActive = yield* Ref.make(false)
   const queryHandleRef = yield* Ref.make<{ interrupt: () => Promise<void> } | null>(null)
   const sessionIdRef = yield* Ref.make("")
@@ -125,7 +109,28 @@ export const shimProgram = Effect.gen(function*() {
     Stream.toAsyncIterable
   )
 
-  const mcpServer = createAskUserMcpServer(answerQueue, closedRef, deps.stderr)
+  const collectAnswers = (questionCount: number) =>
+    Stream.fromQueue(answerQueue).pipe(
+      Stream.map((line) => line.trim()),
+      Stream.filter((line) => line.length > 0),
+      Stream.take(questionCount),
+      Stream.runCollect,
+      Effect.map((chunk) => ({
+        content: [{ type: "text" as const, text: `User answered: ${Array.from(chunk).join("; ")}` }]
+      }))
+    )
+
+  const mcpServer = createSdkMcpServer({
+    name: "ask-user",
+    tools: [
+      tool(
+        "ask_user",
+        "Ask the user a question and wait for their response via Telegram. Always provide 2-4 options for the user to choose from.",
+        askUserQuestionSchema,
+        (args, _extra) => Effect.runPromise(collectAnswers(args.questions.length || 1))
+      )
+    ]
+  })
 
   // Fork stdin reader daemon
   yield* deps.stdin.pipe(
@@ -150,7 +155,7 @@ export const shimProgram = Effect.gen(function*() {
 
         switch (msg.type) {
           case "follow_up": {
-            deps.stderr.write(`claude-shim: follow_up intercepted: ${msg.text.slice(0, 100)}\n`)
+            yield* writeDebug(`follow_up intercepted: ${msg.text.slice(0, 100)}`)
             yield* Queue.offer(followUpQueue, {
               type: "user",
               message: { role: "user", content: msg.text },
@@ -161,7 +166,7 @@ export const shimProgram = Effect.gen(function*() {
           }
           case "shim_approve": {
             const approveText = msg.text ?? "The user has approved. Proceed with implementation."
-            deps.stderr.write("claude-shim: shim_approve intercepted\n")
+            yield* writeDebug("shim_approve intercepted")
             yield* Queue.offer(followUpQueue, {
               type: "user",
               message: { role: "user", content: approveText },
@@ -176,7 +181,7 @@ export const shimProgram = Effect.gen(function*() {
             return
           }
           case "shim_interrupt": {
-            deps.stderr.write("claude-shim: shim_interrupt intercepted\n")
+            yield* writeDebug("shim_interrupt intercepted")
             const handle = yield* Ref.get(queryHandleRef)
             if (handle !== null) {
               yield* Effect.tryPromise({
@@ -195,7 +200,7 @@ export const shimProgram = Effect.gen(function*() {
             return
           }
           case "shim_abort": {
-            deps.stderr.write("claude-shim: shim_abort intercepted\n")
+            yield* writeDebug("shim_abort intercepted")
             yield* Queue.offer(followUpQueue, FollowUpStop)
             return
           }
@@ -203,17 +208,11 @@ export const shimProgram = Effect.gen(function*() {
       })
     ),
     Stream.runDrain,
-    Effect.ensuring(
-      Effect.gen(function*() {
-        yield* Ref.set(closedRef, true)
-        yield* Queue.offer(answerQueue, "")
-      })
-    ),
     Effect.forkDaemon
   )
 
   // Handshake: signal readiness and wait for control message
-  deps.stdout.write(JSON.stringify({ type: "shim_ready" }) + "\n")
+  yield* writeStdout(JSON.stringify({ type: "shim_ready" }) + "\n")
   const controlLine = yield* Queue.take(answerQueue)
   const controlDecoded = decodeShimMessage(controlLine)
 
@@ -251,6 +250,7 @@ export const shimProgram = Effect.gen(function*() {
 
   yield* Effect.addFinalizer(() => Effect.sync(() => q.close()))
   yield* Effect.addFinalizer(() => Queue.offer(followUpQueue, FollowUpStop))
+  yield* Effect.addFinalizer(() => Queue.shutdown(answerQueue))
 
   yield* Stream.fromAsyncIterable(q, (err) => new ShimError({ message: "Stream error", cause: err })).pipe(
     Stream.tap((msg: SDKMessage) =>
@@ -258,7 +258,7 @@ export const shimProgram = Effect.gen(function*() {
         if (msg.type === "system" && msg.subtype === "init") {
           yield* Ref.set(sessionIdRef, msg.session_id)
         }
-        deps.stdout.write(JSON.stringify(msg) + "\n")
+        yield* writeStdout(JSON.stringify(msg) + "\n")
       })
     ),
     Stream.runDrain

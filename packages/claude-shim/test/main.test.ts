@@ -1,9 +1,10 @@
 import type { Query } from "@anthropic-ai/claude-agent-sdk"
 import * as NodeStream from "@effect/platform-node/NodeStream"
 import { describe, expect, it, vi } from "@effect/vitest"
-import { ConfigProvider, Effect, Layer, Queue, Ref, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Sink, Stream } from "effect"
 import { PassThrough } from "node:stream"
-import { ClaudeQuery, collectAnswers, ShimDeps, ShimError, shimProgram } from "../src/main.js"
+import type { ShimError } from "../src/main.js"
+import { ClaudeQuery, ShimDeps, shimProgram } from "../src/main.js"
 
 const SHIM_START_LINE = JSON.stringify({ type: "shim_start" }) + "\n"
 const SHIM_ABORT_LINE = JSON.stringify({ type: "shim_abort" }) + "\n"
@@ -66,8 +67,8 @@ function makeTestLayer(opts: {
   readonly args: ReadonlyArray<string>
   readonly stdinStream: PassThrough
   readonly mockCreateQuery: ReturnType<typeof vi.fn>
-  readonly stdout?: { readonly write: (data: string) => boolean }
-  readonly stderr?: { readonly write: (data: string) => boolean }
+  readonly stdout?: Sink.Sink<void, string>
+  readonly stderr?: Sink.Sink<void, string>
   readonly env?: Record<string, string>
 }): Layer.Layer<ShimDeps | ClaudeQuery> {
   const envMap = new Map(Object.entries(opts.env ?? { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }))
@@ -75,13 +76,14 @@ function makeTestLayer(opts: {
     Layer.succeed(ShimDeps, {
       args: opts.args,
       stdin: stdinFromPassThrough(opts.stdinStream),
-      stdout: opts.stdout ?? { write: vi.fn(() => true) },
-      stderr: opts.stderr ?? { write: vi.fn(() => true) }
+      stdout: opts.stdout ?? Sink.drain,
+      stderr: opts.stderr ?? Sink.drain
     }),
     Layer.succeed(ClaudeQuery, {
       create: (params): Effect.Effect<Query, ShimError> => {
         opts.mockCreateQuery(params)
-        return Effect.succeed(opts.mockCreateQuery.mock.results.at(-1)?.value as Query)
+        const result: Query = opts.mockCreateQuery.mock.results.at(-1)?.value
+        return Effect.succeed(result)
       }
     }),
     Layer.setConfigProvider(ConfigProvider.fromMap(envMap))
@@ -114,12 +116,11 @@ function createMockDeps(overrides?: {
     args: overrides?.args ?? [],
     stdinStream,
     mockCreateQuery,
-    stdout: {
-      write: vi.fn((data: string) => {
+    stdout: Sink.forEach((data: string) =>
+      Effect.sync(() => {
         written.push(data)
-        return true
       })
-    },
+    ),
     ...(overrides?.env !== undefined ? { env: overrides.env } : {})
   })
 
@@ -152,71 +153,6 @@ function createCustomMockQuery(
     [Symbol.asyncIterator]: () => gen
   })
 }
-
-describe("collectAnswers", () => {
-  it.effect("reads 1 answer for single question", () =>
-    Effect.gen(function*() {
-      // Arrange
-      const answerQueue = yield* Queue.unbounded<string>()
-      const closedRef = yield* Ref.make(false)
-      const stderr = { write: vi.fn(() => true) }
-
-      // Act
-      yield* Queue.offer(answerQueue, "Option A")
-      const result = yield* Effect.tryPromise({
-        try: () => collectAnswers(1, answerQueue, closedRef, stderr),
-        catch: () => new Error("collectAnswers failed")
-      })
-
-      // Assert
-      expect(result).toEqual({
-        content: [{ type: "text", text: "User answered: Option A" }]
-      })
-    }))
-
-  it.effect("reads N answers for multi-question input", () =>
-    Effect.gen(function*() {
-      // Arrange
-      const answerQueue = yield* Queue.unbounded<string>()
-      const closedRef = yield* Ref.make(false)
-      const stderr = { write: vi.fn(() => true) }
-
-      // Act
-      yield* Queue.offer(answerQueue, "Option A")
-      yield* Queue.offer(answerQueue, "Option B")
-      const result = yield* Effect.tryPromise({
-        try: () => collectAnswers(2, answerQueue, closedRef, stderr),
-        catch: () => new Error("collectAnswers failed")
-      })
-
-      // Assert
-      expect(result).toEqual({
-        content: [{ type: "text", text: "User answered: Option A; Option B" }]
-      })
-    }))
-
-  it.effect("stops reading when closed with empty line", () =>
-    Effect.gen(function*() {
-      // Arrange
-      const answerQueue = yield* Queue.unbounded<string>()
-      const closedRef = yield* Ref.make(false)
-      const stderr = { write: vi.fn(() => true) }
-
-      // Act
-      yield* Queue.offer(answerQueue, "Only one")
-      yield* Ref.set(closedRef, true)
-      yield* Queue.offer(answerQueue, "")
-      const result = yield* Effect.tryPromise({
-        try: () => collectAnswers(2, answerQueue, closedRef, stderr),
-        catch: () => new Error("collectAnswers failed")
-      })
-
-      // Assert
-      expect(result).toEqual({
-        content: [{ type: "text", text: "User answered: Only one" }]
-      })
-    }))
-})
 
 describe("shimProgram", () => {
   it.effect("creates query with MCP server and disallowed tools", () => {
@@ -428,12 +364,11 @@ describe("shimProgram", () => {
       args: ["Do something"],
       stdinStream,
       mockCreateQuery,
-      stdout: {
-        write: vi.fn((data: string) => {
+      stdout: Sink.forEach((data: string) =>
+        Effect.sync(() => {
           written.push(data)
-          return true
         })
-      }
+      )
     })
 
     return Effect.gen(function*() {

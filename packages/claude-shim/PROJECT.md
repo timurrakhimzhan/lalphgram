@@ -42,11 +42,12 @@ IO dependencies (args, streams):
 ```ts
 interface ShimDepsService {
   args: ReadonlyArray<string>           // CLI args (minus program name)
-  stdin: Stream.Stream<Uint8Array>      // Effect stream (NodeStream.stdin in prod)
-  stdout: { write(data: string): boolean }
-  stderr: { write(data: string): boolean }
+  stdin: Stream.Stream<Uint8Array>      // NodeStream.stdin in prod
+  stdout: Sink.Sink<void, string, never, PlatformError>  // NodeSink.stdout in prod
+  stderr: Sink.Sink<void, string, never, PlatformError>  // NodeSink.stderr in prod
 }
 ```
+In `shimProgram`, output queues are drained through the sinks via background fibers. SDK messages go to stdout; debug trace messages (`{ type: "debug", message }` NDJSON) go to stderr. Writes go through `Queue.offer` helpers; finalizers send a `null` sentinel to flush and join the drain fibers.
 
 ### `ShimError` (Data.TaggedError)
 `{ message: string, cause: unknown }`
@@ -60,11 +61,8 @@ Returns `{ prompt: string, dangerouslySkipPermissions: boolean, model: string | 
 ### `decodeShimMessage(line): Either<ParseError, ShimMessage>`
 Parses a JSON line into a typed control message.
 
-### `collectAnswers(questionCount, answerQueue, closedRef, stderr)`
-Blocks on queue until N answers collected. Returns MCP tool response.
-
-### `createAskUserMcpServer(answerQueue, closedRef, stderr)`
-Creates MCP server with one tool: `ask_user`.
+### MCP Server + `collectAnswers` (internal to `shimProgram`)
+Both the MCP server creation and `collectAnswers` (Stream-based, takes N non-empty answers from queue) are local to `shimProgram`. The `answerQueue` is shut down via `Queue.shutdown` in the scope finalizer.
 
 ---
 
@@ -105,9 +103,10 @@ stdin → shim:   { "type": "shim_start" }   ← proceed
 - All `SDKMessage` objects streamed to stdout as JSON lines
 - Session ID captured from first `system/init` message
 
-### 5. Finalizers (on scope close)
-- `q.close()` — close SDK query
+### 5. Finalizers (on scope close, LIFO order)
 - Offer `FollowUpStop` to followUpQueue — terminate follow-up iterable
+- `q.close()` — close SDK query
+- Flush output queues — offer `null` sentinel, join drain fibers
 
 ---
 
@@ -156,7 +155,7 @@ All messages are JSON objects with a `type` field.
 
 **Flow**:
 1. Claude calls `ask_user` tool via MCP
-2. Tool handler calls `collectAnswers(N, answerQueue, closedRef, stderr)`
+2. Tool handler calls `collectAnswers(N, answerQueue)`
 3. `collectAnswers` blocks on `answerQueue.take()` until N non-empty lines received
 4. PlanSession (in notifications package) sends answers via stdin as plain text
 5. Returns `"User answered: opt1; opt2"` to Claude
