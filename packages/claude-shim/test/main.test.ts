@@ -1,17 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue, Ref } from "effect"
 import { PassThrough } from "node:stream"
-import {
-  collectAnswers,
-  FollowUpQueue,
-  getShimControlType,
-  LineReader,
-  parseArgs,
-  parseShimControl,
-  ShimDeps,
-  type ShimDepsService,
-  shimProgram
-} from "../src/main.js"
+import { collectAnswers, ShimDeps, type ShimDepsService, shimProgram } from "../src/main.js"
 
 const SHIM_START_LINE = JSON.stringify({ type: "shim_start" }) + "\n"
 const SHIM_ABORT_LINE = JSON.stringify({ type: "shim_abort" }) + "\n"
@@ -129,322 +119,69 @@ function createCustomMockQuery(
   })
 }
 
-describe("LineReader", () => {
-  it("reads buffered line immediately", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    stream.write("hello\n")
-
-    // Allow readline to process
-    await new Promise((r) => setTimeout(r, 10))
-
-    // Act
-    const line = await reader.nextLine()
-
-    // Assert
-    expect(line).toBe("hello")
-    stream.end()
-  })
-
-  it("waits when buffer is empty and resolves when line arrives", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-
-    // Act
-    const promise = reader.nextLine()
-    stream.write("delayed\n")
-    const line = await promise
-
-    // Assert
-    expect(line).toBe("delayed")
-    stream.end()
-  })
-
-  it("returns empty string when stream closes while waiting", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-
-    // Act
-    const promise = reader.nextLine()
-    stream.end()
-    const line = await promise
-
-    // Assert
-    expect(line).toBe("")
-  })
-
-  it("reports isClosed after stream ends and buffer drains", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    stream.write("line1\n")
-    stream.end()
-
-    // Allow readline to process
-    await new Promise((r) => setTimeout(r, 10))
-
-    // Act & Assert — buffer has content, so not closed yet
-    expect(reader.isClosed).toBe(false)
-    await reader.nextLine()
-    expect(reader.isClosed).toBe(true)
-  })
-
-  it("intercepted lines do not appear in nextLine", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    const intercepted: Array<string> = []
-    reader.interceptor = (line) => {
-      if (line.startsWith("INTERCEPT:")) {
-        intercepted.push(line)
-        return true
-      }
-      return false
-    }
-
-    // Act
-    stream.write("INTERCEPT:secret\n")
-    stream.write("normal line\n")
-    await new Promise((r) => setTimeout(r, 10))
-    const line = await reader.nextLine()
-
-    // Assert
-    expect(line).toBe("normal line")
-    expect(intercepted).toEqual(["INTERCEPT:secret"])
-    stream.end()
-  })
-
-  it("interceptor receives lines that are waiting", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    reader.interceptor = (line) => line === "skip"
-
-    // Act
-    const promise = reader.nextLine()
-    stream.write("skip\n")
-    stream.write("keep\n")
-    const line = await promise
-
-    // Assert
-    expect(line).toBe("keep")
-    stream.end()
-  })
-})
-
-describe("FollowUpQueue", () => {
-  it("yields offered messages via async iteration", async () => {
-    // Arrange
-    const queue = new FollowUpQueue()
-    const msg = {
-      type: "user" as const,
-      message: { role: "user" as const, content: "hello" },
-      parent_tool_use_id: null,
-      session_id: "s1"
-    }
-
-    // Act
-    queue.offer(msg)
-    queue.close()
-    const results: Array<unknown> = []
-    for await (const m of queue) {
-      results.push(m)
-    }
-
-    // Assert
-    expect(results).toEqual([msg])
-  })
-
-  it("waits for offer when no messages pending", async () => {
-    // Arrange
-    const queue = new FollowUpQueue()
-    const msg = {
-      type: "user" as const,
-      message: { role: "user" as const, content: "delayed" },
-      parent_tool_use_id: null,
-      session_id: "s1"
-    }
-
-    // Act
-    const iter = queue[Symbol.asyncIterator]()
-    const promise = iter.next()
-    queue.offer(msg)
-    const result = await promise
-
-    // Assert
-    expect(result.done).toBe(false)
-    expect(result.value).toEqual(msg)
-    queue.close()
-  })
-
-  it("signals done after close when empty", async () => {
-    // Arrange
-    const queue = new FollowUpQueue()
-
-    // Act
-    const iter = queue[Symbol.asyncIterator]()
-    const promise = iter.next()
-    queue.close()
-    const result = await promise
-
-    // Assert
-    expect(result.done).toBe(true)
-  })
-
-  it("ignores offers after close", async () => {
-    // Arrange
-    const queue = new FollowUpQueue()
-    queue.close()
-    const msg = {
-      type: "user" as const,
-      message: { role: "user" as const, content: "too late" },
-      parent_tool_use_id: null,
-      session_id: "s1"
-    }
-
-    // Act
-    queue.offer(msg)
-    const results: Array<unknown> = []
-    for await (const m of queue) {
-      results.push(m)
-    }
-
-    // Assert
-    expect(results).toEqual([])
-  })
-})
-
 describe("collectAnswers", () => {
-  it("reads 1 answer for single question", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    const stderr = { write: vi.fn(() => true) }
+  it.effect("reads 1 answer for single question", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerQueue = yield* Queue.unbounded<string>()
+      const closedRef = yield* Ref.make(false)
+      const stderr = { write: vi.fn(() => true) }
 
-    // Act
-    const promise = collectAnswers(1, reader, stderr)
-    stream.write("Option A\n")
-    const result = await promise
+      // Act
+      yield* Queue.offer(answerQueue, "Option A")
+      const result = yield* Effect.tryPromise({
+        try: () => collectAnswers(1, answerQueue, closedRef, stderr),
+        catch: () => new Error("collectAnswers failed")
+      })
 
-    // Assert
-    expect(result).toEqual({
-      content: [{ type: "text", text: "User answered: Option A" }]
-    })
-    stream.end()
-  })
+      // Assert
+      expect(result).toEqual({
+        content: [{ type: "text", text: "User answered: Option A" }]
+      })
+    }))
 
-  it("reads N answers for multi-question input", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    const stderr = { write: vi.fn(() => true) }
+  it.effect("reads N answers for multi-question input", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerQueue = yield* Queue.unbounded<string>()
+      const closedRef = yield* Ref.make(false)
+      const stderr = { write: vi.fn(() => true) }
 
-    // Act
-    const promise = collectAnswers(2, reader, stderr)
-    stream.write("Option A\n")
-    stream.write("Option B\n")
-    const result = await promise
+      // Act
+      yield* Queue.offer(answerQueue, "Option A")
+      yield* Queue.offer(answerQueue, "Option B")
+      const result = yield* Effect.tryPromise({
+        try: () => collectAnswers(2, answerQueue, closedRef, stderr),
+        catch: () => new Error("collectAnswers failed")
+      })
 
-    // Assert
-    expect(result).toEqual({
-      content: [{ type: "text", text: "User answered: Option A; Option B" }]
-    })
-    stream.end()
-  })
+      // Assert
+      expect(result).toEqual({
+        content: [{ type: "text", text: "User answered: Option A; Option B" }]
+      })
+    }))
 
-  it("stops reading when stream closes", async () => {
-    // Arrange
-    const stream = new PassThrough()
-    const reader = new LineReader(stream)
-    const stderr = { write: vi.fn(() => true) }
+  it.effect("stops reading when closed with empty line", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerQueue = yield* Queue.unbounded<string>()
+      const closedRef = yield* Ref.make(false)
+      const stderr = { write: vi.fn(() => true) }
 
-    // Act
-    const promise = collectAnswers(2, reader, stderr)
-    stream.write("Only one\n")
-    stream.end()
-    const result = await promise
+      // Act
+      yield* Queue.offer(answerQueue, "Only one")
+      yield* Ref.set(closedRef, true)
+      yield* Queue.offer(answerQueue, "")
+      const result = yield* Effect.tryPromise({
+        try: () => collectAnswers(2, answerQueue, closedRef, stderr),
+        catch: () => new Error("collectAnswers failed")
+      })
 
-    // Assert
-    expect(result).toEqual({
-      content: [{ type: "text", text: "User answered: Only one" }]
-    })
-  })
-})
-
-describe("parseArgs", () => {
-  it("extracts positional prompt", () => {
-    // Arrange
-    const args = ["Hello world"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.prompt).toBe("Hello world")
-    expect(result.dangerouslySkipPermissions).toBe(false)
-    expect(result.model).toBeNull()
-  })
-
-  it("detects --dangerously-skip-permissions", () => {
-    // Arrange
-    const args = ["--dangerously-skip-permissions", "Do something"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.dangerouslySkipPermissions).toBe(true)
-    expect(result.prompt).toBe("Do something")
-  })
-
-  it("extracts --model value", () => {
-    // Arrange
-    const args = ["--model", "claude-opus-4-6", "Hello"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.model).toBe("claude-opus-4-6")
-    expect(result.prompt).toBe("Hello")
-  })
-
-  it("skips --output-format and its value", () => {
-    // Arrange
-    const args = ["--output-format", "stream-json", "Hello"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.prompt).toBe("Hello")
-  })
-
-  it("skips -p, --print, and --verbose flags", () => {
-    // Arrange
-    const args = ["-p", "--verbose", "--print", "Hello"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.prompt).toBe("Hello")
-  })
-
-  it("handles -- separator for prompt", () => {
-    // Arrange
-    const args = ["--dangerously-skip-permissions", "--", "prompt", "text", "here"]
-
-    // Act
-    const result = parseArgs(args)
-
-    // Assert
-    expect(result.prompt).toBe("prompt text here")
-    expect(result.dangerouslySkipPermissions).toBe(true)
-  })
+      // Assert
+      expect(result).toEqual({
+        content: [{ type: "text", text: "User answered: Only one" }]
+      })
+    }))
 })
 
 describe("shimProgram", () => {
@@ -460,7 +197,9 @@ describe("shimProgram", () => {
       // Assert
       expect(mockCreateQuery).toHaveBeenCalledWith(
         expect.objectContaining({
-          prompt: expect.any(FollowUpQueue),
+          prompt: expect.objectContaining({
+            [Symbol.asyncIterator]: expect.any(Function)
+          }),
           options: expect.objectContaining({
             model: "claude-sonnet-4-6",
             pathToClaudeCodeExecutable: "/usr/local/bin/claude",
@@ -596,7 +335,7 @@ describe("shimProgram", () => {
     const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
     const gen = (async function*() {
       yield { type: "system", subtype: "init", session_id: "test-session" }
-      // Write follow_up and wait for interceptor to process it
+      // Write follow_up and wait for routing to process it
       stdinStream.write(`${JSON.stringify({ type: "follow_up", text: "also consider X" })}\n`)
       await delay(50)
       stdinStream.end()
@@ -712,155 +451,6 @@ describe("shimProgram", () => {
         })
       }
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
-  })
-})
-
-describe("getShimControlType", () => {
-  it("returns shim_start for valid start message", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_start" })
-
-    // Act
-    const result = getShimControlType(line)
-
-    // Assert
-    expect(result).toBe("shim_start")
-  })
-
-  it("returns shim_abort for valid abort message", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_abort" })
-
-    // Act
-    const result = getShimControlType(line)
-
-    // Assert
-    expect(result).toBe("shim_abort")
-  })
-
-  it("returns shim_interrupt for valid interrupt message", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_interrupt", text: "urgent" })
-
-    // Act
-    const result = getShimControlType(line)
-
-    // Assert
-    expect(result).toBe("shim_interrupt")
-  })
-
-  it("returns null for unknown type", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "follow_up", text: "hello" })
-
-    // Act
-    const result = getShimControlType(line)
-
-    // Assert
-    expect(result).toBeNull()
-  })
-
-  it("returns null for invalid JSON", () => {
-    // Arrange
-    const line = "not json"
-
-    // Act
-    const result = getShimControlType(line)
-
-    // Assert
-    expect(result).toBeNull()
-  })
-
-  it("returns null for empty string", () => {
-    // Act
-    const result = getShimControlType("")
-
-    // Assert
-    expect(result).toBeNull()
-  })
-})
-
-describe("parseShimControl", () => {
-  it("returns shim_start with text when present", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_start", text: "Go ahead!" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toEqual({ type: "shim_start", text: "Go ahead!" })
-  })
-
-  it("returns shim_start without text when text field is absent", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_start" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toEqual({ type: "shim_start" })
-  })
-
-  it("returns shim_abort", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_abort" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toEqual({ type: "shim_abort" })
-  })
-
-  it("returns shim_interrupt with text when present", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_interrupt", text: "urgent message" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toEqual({ type: "shim_interrupt", text: "urgent message" })
-  })
-
-  it("returns shim_interrupt without text when text field is absent", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "shim_interrupt" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toEqual({ type: "shim_interrupt" })
-  })
-
-  it("returns null for follow_up type", () => {
-    // Arrange
-    const line = JSON.stringify({ type: "follow_up", text: "hello" })
-
-    // Act
-    const result = parseShimControl(line)
-
-    // Assert
-    expect(result).toBeNull()
-  })
-
-  it("returns null for invalid JSON", () => {
-    // Act
-    const result = parseShimControl("not json")
-
-    // Assert
-    expect(result).toBeNull()
-  })
-
-  it("returns null for empty string", () => {
-    // Act
-    const result = parseShimControl("")
-
-    // Assert
-    expect(result).toBeNull()
   })
 })
 

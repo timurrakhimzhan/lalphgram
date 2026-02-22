@@ -5,98 +5,15 @@
  */
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import { Context, Data, Effect, Stream } from "effect"
-import { createInterface } from "node:readline"
+import * as NodeStream from "@effect/platform-node/NodeStream"
+import { Context, Data, Effect, Either, Option, Queue, Ref, Stream } from "effect"
 import { z } from "zod/v4"
+import { parseArgs } from "./parseArgs.js"
+import { decodeShimMessage } from "./schemas.js"
 
-export class LineReader {
-  private readonly buffer: Array<string> = []
-  private waiting: ((line: string) => void) | null = null
-  private _closed = false
-  interceptor: ((line: string) => boolean) | null = null
-
-  constructor(input: NodeJS.ReadableStream) {
-    const rl = createInterface({ input, terminal: false })
-    rl.on("line", (line) => {
-      if (this.interceptor?.(line)) return
-      if (this.waiting) {
-        const resolve = this.waiting
-        this.waiting = null
-        resolve(line)
-      } else {
-        this.buffer.push(line)
-      }
-    })
-    rl.on("close", () => {
-      this._closed = true
-      if (this.waiting) {
-        const resolve = this.waiting
-        this.waiting = null
-        resolve("")
-      }
-    })
-  }
-
-  get isClosed(): boolean {
-    return this._closed && this.buffer.length === 0
-  }
-
-  nextLine(): Promise<string> {
-    if (this.buffer.length > 0) {
-      return Promise.resolve(this.buffer.shift()!)
-    }
-    if (this._closed) {
-      return Promise.resolve("")
-    }
-    return new Promise<string>((resolve) => {
-      this.waiting = resolve
-    })
-  }
-}
-
-const iterDone: IteratorReturnResult<undefined> = { value: undefined, done: true }
-
-export class FollowUpQueue implements AsyncIterable<SDKUserMessage> {
-  private readonly pending: Array<SDKUserMessage> = []
-  private waiting: ((result: IteratorResult<SDKUserMessage>) => void) | null = null
-  private _done = false
-
-  offer(msg: SDKUserMessage): void {
-    if (this._done) return
-    if (this.waiting) {
-      const resolve = this.waiting
-      this.waiting = null
-      resolve({ value: msg, done: false })
-    } else {
-      this.pending.push(msg)
-    }
-  }
-
-  close(): void {
-    this._done = true
-    if (this.waiting) {
-      const resolve = this.waiting
-      this.waiting = null
-      resolve(iterDone)
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    return {
-      next: () => {
-        if (this.pending.length > 0) {
-          return Promise.resolve({ value: this.pending.shift()!, done: false })
-        }
-        if (this._done) {
-          return Promise.resolve(iterDone)
-        }
-        return new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
-          this.waiting = resolve
-        })
-      }
-    }
-  }
-}
+export { parseArgs } from "./parseArgs.js"
+export type { ParsedArgs } from "./parseArgs.js"
+export { decodeShimMessage } from "./schemas.js"
 
 export class ShimError extends Data.TaggedError("ShimError")<{
   readonly message: string
@@ -114,45 +31,6 @@ export interface ShimDepsService {
 
 export class ShimDeps extends Context.Tag("ShimDeps")<ShimDeps, ShimDepsService>() {}
 
-export interface ParsedArgs {
-  readonly prompt: string
-  readonly dangerouslySkipPermissions: boolean
-  readonly model: string | null
-}
-
-export function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
-  let dangerouslySkipPermissions = false
-  let prompt = ""
-  let model: string | null = null
-  let skipNext = false
-
-  for (let i = 0; i < args.length; i++) {
-    if (skipNext) {
-      skipNext = false
-      continue
-    }
-    const arg = args[i]!
-    if (arg === "--dangerously-skip-permissions") {
-      dangerouslySkipPermissions = true
-    } else if (arg === "--output-format") {
-      skipNext = true
-    } else if (arg === "--model") {
-      model = args[i + 1] ?? null
-      skipNext = true
-    } else if (arg === "--verbose" || arg === "-p" || arg === "--print") {
-      // ignored — SDK handles output format and verbosity
-    } else if (arg === "--") {
-      // everything after -- is the prompt
-      prompt = args.slice(i + 1).join(" ")
-      break
-    } else if (!arg.startsWith("-")) {
-      prompt = arg
-    }
-  }
-
-  return { prompt, dangerouslySkipPermissions, model }
-}
-
 const askUserQuestionSchema = {
   questions: z.array(z.object({
     question: z.string().describe("The question to ask the user"),
@@ -167,16 +45,20 @@ const askUserQuestionSchema = {
 
 export const collectAnswers = async (
   questionCount: number,
-  lineReader: LineReader,
+  answerQueue: Queue.Queue<string>,
+  closedRef: Ref.Ref<boolean>,
   stderr: { write(data: string): boolean }
 ) => {
   stderr.write(`claude-shim: ask_user MCP tool blocking for ${questionCount} answer(s)\n`)
   const answers: Array<string> = []
   while (answers.length < questionCount) {
-    const line = await lineReader.nextLine()
+    const line = await Effect.runPromise(Queue.take(answerQueue))
     const trimmed = line.trim()
-    if (trimmed.length === 0 && lineReader.isClosed) break
-    if (trimmed.length === 0) continue
+    if (trimmed.length === 0) {
+      const closed = Effect.runSync(Ref.get(closedRef))
+      if (closed) break
+      continue
+    }
     answers.push(trimmed)
   }
   stderr.write(`claude-shim: ask_user received: ${answers.join("; ")}\n`)
@@ -186,7 +68,8 @@ export const collectAnswers = async (
 }
 
 export const createAskUserMcpServer = (
-  lineReader: LineReader,
+  answerQueue: Queue.Queue<string>,
+  closedRef: Ref.Ref<boolean>,
   stderr: { write(data: string): boolean }
 ) =>
   createSdkMcpServer({
@@ -196,59 +79,10 @@ export const createAskUserMcpServer = (
         "ask_user",
         "Ask the user a question and wait for their response via Telegram. Always provide 2-4 options for the user to choose from.",
         askUserQuestionSchema,
-        (args, _extra) => collectAnswers(args.questions.length || 1, lineReader, stderr)
+        (args, _extra) => collectAnswers(args.questions.length || 1, answerQueue, closedRef, stderr)
       )
     ]
   })
-
-function getFollowUpText(value: unknown): string | null {
-  if (typeof value !== "object" || value === null) return null
-  if (!("type" in value) || !("text" in value)) return null
-  // Use JSON round-trip to get typed access without assertions
-  const { text, type } = Object.fromEntries(Object.entries(value))
-  if (type === "follow_up" && typeof text === "string") return text
-  return null
-}
-
-export function getShimControlType(line: string): string | null {
-  if (line.trim().length === 0) return null
-  try {
-    const parsed: unknown = JSON.parse(line)
-    if (typeof parsed !== "object" || parsed === null) return null
-    if (!("type" in parsed)) return null
-    const { type } = Object.fromEntries(Object.entries(parsed))
-    if (type === "shim_start" || type === "shim_abort" || type === "shim_interrupt") return type
-    return null
-  } catch {
-    return null
-  }
-}
-
-export function parseShimControl(
-  line: string
-): { readonly type: "shim_start" | "shim_abort" | "shim_interrupt"; readonly text?: string } | null {
-  if (line.trim().length === 0) return null
-  try {
-    const parsed: unknown = JSON.parse(line)
-    if (typeof parsed !== "object" || parsed === null) return null
-    if (!("type" in parsed)) return null
-    const entries = Object.fromEntries(Object.entries(parsed))
-    if (entries["type"] === "shim_start") {
-      return typeof entries["text"] === "string"
-        ? { type: "shim_start", text: entries["text"] }
-        : { type: "shim_start" }
-    }
-    if (entries["type"] === "shim_abort") return { type: "shim_abort" }
-    if (entries["type"] === "shim_interrupt") {
-      return typeof entries["text"] === "string"
-        ? { type: "shim_interrupt", text: entries["text"] }
-        : { type: "shim_interrupt" }
-    }
-    return null
-  } catch {
-    return null
-  }
-}
 
 export const shimProgram = Effect.gen(function*() {
   const deps = yield* ShimDeps
@@ -261,36 +95,144 @@ export const shimProgram = Effect.gen(function*() {
   }
 
   const model = parsed.model ?? deps.env["CLAUDE_MODEL"] ?? "claude-sonnet-4-6"
-  const lineReader = new LineReader(deps.stdin)
-  const mcpServer = createAskUserMcpServer(lineReader, deps.stderr)
+
+  // State refs
+  const answerQueue = yield* Queue.unbounded<string>()
+  const closedRef = yield* Ref.make(false)
+  const routingActive = yield* Ref.make(false)
+  const queryHandleRef = yield* Ref.make<{ interrupt: () => Promise<void> } | null>(null)
+  const sessionIdRef = yield* Ref.make("")
+
+  // Follow-up queue: Option.some = message, Option.none = close signal
+  const followUpQueue = yield* Queue.unbounded<Option.Option<SDKUserMessage>>()
+
+  const followUpIterable: AsyncIterable<SDKUserMessage> = Stream.fromQueue(followUpQueue).pipe(
+    Stream.takeWhile(Option.isSome),
+    Stream.map((opt) => opt.value),
+    Stream.toAsyncIterable
+  )
+
+  const mcpServer = createAskUserMcpServer(answerQueue, closedRef, deps.stderr)
+
+  // Fork stdin reader daemon
+  yield* NodeStream.fromReadable<ShimError>(
+    () => deps.stdin,
+    (err) => new ShimError({ message: "stdin read error", cause: err })
+  ).pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.mapEffect((line) =>
+      Effect.gen(function*() {
+        const isRouting = yield* Ref.get(routingActive)
+        if (!isRouting) {
+          yield* Queue.offer(answerQueue, line)
+          return
+        }
+
+        const decoded = decodeShimMessage(line)
+        if (Either.isLeft(decoded)) {
+          yield* Queue.offer(answerQueue, line)
+          return
+        }
+
+        const msg = decoded.right
+        const sessionId = yield* Ref.get(sessionIdRef)
+
+        switch (msg.type) {
+          case "follow_up": {
+            deps.stderr.write(`claude-shim: follow_up intercepted: ${msg.text.slice(0, 100)}\n`)
+            yield* Queue.offer(
+              followUpQueue,
+              Option.some({
+                type: "user",
+                message: { role: "user", content: msg.text },
+                parent_tool_use_id: null,
+                session_id: sessionId
+              })
+            )
+            return
+          }
+          case "shim_start": {
+            const approveText = msg.text ?? "The user has approved. Proceed with implementation."
+            deps.stderr.write("claude-shim: shim_start intercepted\n")
+            yield* Queue.offer(
+              followUpQueue,
+              Option.some({
+                type: "user",
+                message: { role: "user", content: approveText },
+                parent_tool_use_id: null,
+                session_id: sessionId
+              })
+            )
+            yield* Queue.offer(followUpQueue, Option.none())
+            return
+          }
+          case "shim_interrupt": {
+            deps.stderr.write("claude-shim: shim_interrupt intercepted\n")
+            const handle = yield* Ref.get(queryHandleRef)
+            if (handle !== null) {
+              yield* Effect.tryPromise({
+                try: () => handle.interrupt(),
+                catch: (err) => new ShimError({ message: "interrupt error", cause: err })
+              }).pipe(Effect.catchTag("ShimError", (err) => Effect.logError("interrupt error", err)))
+            }
+            if (msg.text != null) {
+              yield* Queue.offer(
+                followUpQueue,
+                Option.some({
+                  type: "user",
+                  message: { role: "user", content: msg.text },
+                  parent_tool_use_id: null,
+                  session_id: sessionId
+                })
+              )
+            }
+            return
+          }
+          case "shim_abort": {
+            deps.stderr.write("claude-shim: shim_abort intercepted\n")
+            yield* Queue.offer(followUpQueue, Option.none())
+            return
+          }
+        }
+      })
+    ),
+    Stream.runDrain,
+    Effect.ensuring(
+      Effect.gen(function*() {
+        yield* Ref.set(closedRef, true)
+        yield* Queue.offer(answerQueue, "")
+      })
+    ),
+    Effect.forkDaemon
+  )
 
   // Handshake: signal readiness and wait for control message
   deps.stdout.write(JSON.stringify({ type: "shim_ready" }) + "\n")
-  const controlLine = yield* Effect.tryPromise({
-    try: () => lineReader.nextLine(),
-    catch: (err) => new ShimError({ message: "Failed to read control line", cause: err })
-  })
-  const controlType = getShimControlType(controlLine)
-  if (controlType === "shim_abort") return
-  if (controlType !== "shim_start") {
+  const controlLine = yield* Queue.take(answerQueue)
+  const controlDecoded = decodeShimMessage(controlLine)
+
+  if (Either.isRight(controlDecoded) && controlDecoded.right.type === "shim_abort") return
+  if (Either.isLeft(controlDecoded) || controlDecoded.right.type !== "shim_start") {
     return yield* new ShimError({
       message: `Unexpected control message: ${controlLine}`,
       cause: null
     })
   }
 
-  const followUpQueue = new FollowUpQueue()
-  let sessionId = ""
-
-  followUpQueue.offer({
-    type: "user",
-    message: { role: "user", content: parsed.prompt },
-    parent_tool_use_id: null,
-    session_id: ""
-  })
+  // Offer initial prompt to follow-up queue
+  yield* Queue.offer(
+    followUpQueue,
+    Option.some({
+      type: "user",
+      message: { role: "user", content: parsed.prompt },
+      parent_tool_use_id: null,
+      session_id: ""
+    })
+  )
 
   const q: Query = deps.createQuery({
-    prompt: followUpQueue,
+    prompt: followUpIterable,
     options: {
       model,
       pathToClaudeCodeExecutable: realClaudePath,
@@ -302,70 +244,17 @@ export const shimProgram = Effect.gen(function*() {
     }
   })
 
+  yield* Ref.set(queryHandleRef, { interrupt: () => q.interrupt() })
+  yield* Ref.set(routingActive, true)
+
   yield* Effect.addFinalizer(() => Effect.sync(() => q.close()))
-
-  lineReader.interceptor = (line) => {
-    try {
-      const parsed: unknown = JSON.parse(line)
-
-      // Handle follow_up — queue stays open for more messages
-      const followUpText = getFollowUpText(parsed)
-      if (followUpText !== null) {
-        deps.stderr.write(`claude-shim: follow_up intercepted: ${followUpText.slice(0, 100)}\n`)
-        followUpQueue.offer({
-          type: "user",
-          message: { role: "user", content: followUpText },
-          parent_tool_use_id: null,
-          session_id: sessionId
-        })
-        return true
-      }
-
-      // Handle post-handshake control messages (shim_start / shim_abort / shim_interrupt)
-      const control = parseShimControl(line)
-      if (control !== null) {
-        if (control.type === "shim_start") {
-          const approveText = control.text ?? "The user has approved. Proceed with implementation."
-          deps.stderr.write("claude-shim: shim_start intercepted\n")
-          followUpQueue.offer({
-            type: "user",
-            message: { role: "user", content: approveText },
-            parent_tool_use_id: null,
-            session_id: sessionId
-          })
-          followUpQueue.close()
-        } else if (control.type === "shim_interrupt") {
-          deps.stderr.write("claude-shim: shim_interrupt intercepted\n")
-          void q.interrupt().catch((err: unknown) =>
-            deps.stderr.write(`claude-shim: interrupt error: ${String(err)}\n`)
-          )
-          if (control.text != null) {
-            followUpQueue.offer({
-              type: "user",
-              message: { role: "user", content: control.text },
-              parent_tool_use_id: null,
-              session_id: sessionId
-            })
-          }
-        } else {
-          deps.stderr.write("claude-shim: shim_abort intercepted\n")
-          followUpQueue.close()
-        }
-        return true
-      }
-    } catch {
-      // not JSON — pass through to collectAnswers
-    }
-    return false
-  }
-
-  yield* Effect.addFinalizer(() => Effect.sync(() => followUpQueue.close()))
+  yield* Effect.addFinalizer(() => Queue.offer(followUpQueue, Option.none()))
 
   yield* Stream.fromAsyncIterable(q, (err) => new ShimError({ message: "Stream error", cause: err })).pipe(
     Stream.tap((msg: SDKMessage) =>
-      Effect.sync(() => {
+      Effect.gen(function*() {
         if (msg.type === "system" && msg.subtype === "init") {
-          sessionId = msg.session_id
+          yield* Ref.set(sessionIdRef, msg.session_id)
         }
         deps.stdout.write(JSON.stringify(msg) + "\n")
       })
