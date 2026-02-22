@@ -6,7 +6,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import * as NodeStream from "@effect/platform-node/NodeStream"
-import { Context, Data, Effect, Either, Option, Queue, Ref, Stream } from "effect"
+import { Context, Data, Effect, Either, Queue, Ref, Stream } from "effect"
 import { z } from "zod/v4"
 import { parseArgs } from "./parseArgs.js"
 import { decodeShimMessage } from "./schemas.js"
@@ -84,6 +84,9 @@ export const createAskUserMcpServer = (
     ]
   })
 
+const FollowUpStop: unique symbol = Symbol.for("FollowUpStop")
+type FollowUpItem = SDKUserMessage | typeof FollowUpStop
+
 export const shimProgram = Effect.gen(function*() {
   const deps = yield* ShimDeps
   const parsed = parseArgs(deps.args)
@@ -103,12 +106,11 @@ export const shimProgram = Effect.gen(function*() {
   const queryHandleRef = yield* Ref.make<{ interrupt: () => Promise<void> } | null>(null)
   const sessionIdRef = yield* Ref.make("")
 
-  // Follow-up queue: Option.some = message, Option.none = close signal
-  const followUpQueue = yield* Queue.unbounded<Option.Option<SDKUserMessage>>()
+  // Follow-up queue: messages or FollowUpStop to signal termination
+  const followUpQueue = yield* Queue.unbounded<FollowUpItem>()
 
   const followUpIterable: AsyncIterable<SDKUserMessage> = Stream.fromQueue(followUpQueue).pipe(
-    Stream.takeWhile(Option.isSome),
-    Stream.map((opt) => opt.value),
+    Stream.takeWhile((item): item is SDKUserMessage => item !== FollowUpStop),
     Stream.toAsyncIterable
   )
 
@@ -141,30 +143,24 @@ export const shimProgram = Effect.gen(function*() {
         switch (msg.type) {
           case "follow_up": {
             deps.stderr.write(`claude-shim: follow_up intercepted: ${msg.text.slice(0, 100)}\n`)
-            yield* Queue.offer(
-              followUpQueue,
-              Option.some({
-                type: "user",
-                message: { role: "user", content: msg.text },
-                parent_tool_use_id: null,
-                session_id: sessionId
-              })
-            )
+            yield* Queue.offer(followUpQueue, {
+              type: "user",
+              message: { role: "user", content: msg.text },
+              parent_tool_use_id: null,
+              session_id: sessionId
+            })
             return
           }
           case "shim_start": {
             const approveText = msg.text ?? "The user has approved. Proceed with implementation."
             deps.stderr.write("claude-shim: shim_start intercepted\n")
-            yield* Queue.offer(
-              followUpQueue,
-              Option.some({
-                type: "user",
-                message: { role: "user", content: approveText },
-                parent_tool_use_id: null,
-                session_id: sessionId
-              })
-            )
-            yield* Queue.offer(followUpQueue, Option.none())
+            yield* Queue.offer(followUpQueue, {
+              type: "user",
+              message: { role: "user", content: approveText },
+              parent_tool_use_id: null,
+              session_id: sessionId
+            })
+            yield* Queue.offer(followUpQueue, FollowUpStop)
             return
           }
           case "shim_interrupt": {
@@ -177,21 +173,18 @@ export const shimProgram = Effect.gen(function*() {
               }).pipe(Effect.catchTag("ShimError", (err) => Effect.logError("interrupt error", err)))
             }
             if (msg.text != null) {
-              yield* Queue.offer(
-                followUpQueue,
-                Option.some({
-                  type: "user",
-                  message: { role: "user", content: msg.text },
-                  parent_tool_use_id: null,
-                  session_id: sessionId
-                })
-              )
+              yield* Queue.offer(followUpQueue, {
+                type: "user",
+                message: { role: "user", content: msg.text },
+                parent_tool_use_id: null,
+                session_id: sessionId
+              })
             }
             return
           }
           case "shim_abort": {
             deps.stderr.write("claude-shim: shim_abort intercepted\n")
-            yield* Queue.offer(followUpQueue, Option.none())
+            yield* Queue.offer(followUpQueue, FollowUpStop)
             return
           }
         }
@@ -221,15 +214,12 @@ export const shimProgram = Effect.gen(function*() {
   }
 
   // Offer initial prompt to follow-up queue
-  yield* Queue.offer(
-    followUpQueue,
-    Option.some({
-      type: "user",
-      message: { role: "user", content: parsed.prompt },
-      parent_tool_use_id: null,
-      session_id: ""
-    })
-  )
+  yield* Queue.offer(followUpQueue, {
+    type: "user",
+    message: { role: "user", content: parsed.prompt },
+    parent_tool_use_id: null,
+    session_id: ""
+  })
 
   const q: Query = deps.createQuery({
     prompt: followUpIterable,
@@ -248,7 +238,7 @@ export const shimProgram = Effect.gen(function*() {
   yield* Ref.set(routingActive, true)
 
   yield* Effect.addFinalizer(() => Effect.sync(() => q.close()))
-  yield* Effect.addFinalizer(() => Queue.offer(followUpQueue, Option.none()))
+  yield* Effect.addFinalizer(() => Queue.offer(followUpQueue, FollowUpStop))
 
   yield* Stream.fromAsyncIterable(q, (err) => new ShimError({ message: "Stream error", cause: err })).pipe(
     Stream.tap((msg: SDKMessage) =>
