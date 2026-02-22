@@ -5,10 +5,9 @@
  */
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import { Context, Data, Effect, Stream, Queue } from "effect"
+import { Context, Data, Effect, Stream } from "effect"
 import { createInterface } from "node:readline"
 import { z } from "zod/v4"
-
 
 export class LineReader {
   private readonly buffer: Array<string> = []

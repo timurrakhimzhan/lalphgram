@@ -22,6 +22,7 @@ import {
   BUG_BUTTON_LABEL,
   FEATURE_BUTTON_LABEL,
   INTERRUPT_BUTTON_LABEL,
+  OMIT_BUTTON_LABEL,
   OTHER_BUTTON_LABEL,
   PLAN_BUTTON_LABEL,
   REFACTOR_BUTTON_LABEL,
@@ -631,7 +632,7 @@ describe("follow-up buffer vs interrupt choice", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Send as follow-up or interrupt Claude?",
-          options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }]
+          options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }, { label: OMIT_BUTTON_LABEL }]
         })
       )
     }).pipe(Effect.provide(layer))
@@ -666,6 +667,37 @@ describe("follow-up buffer vs interrupt choice", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         "Message buffered — Claude will process it shortly."
       )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("discards follow-up when Omit button is tapped", () => {
+    // Arrange
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: OMIT_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(planSessionMock.sendFollowUp).not.toHaveBeenCalled()
+      expect(planSessionMock.interrupt).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Message discarded.")
     }).pipe(Effect.provide(layer))
   })
 

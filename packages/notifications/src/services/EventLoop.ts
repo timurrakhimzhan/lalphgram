@@ -295,6 +295,12 @@ export const runEventLoop = Effect.gen(function*() {
           }
           return
         }
+        if (msg.text === OMIT_BUTTON_LABEL) {
+          yield* Ref.set(pendingFollowUp, Option.none())
+          yield* Effect.log("Follow-up message discarded")
+          yield* notifier.sendMessage("Message discarded.")
+          return
+        }
         const pending = yield* Ref.get(pendingAnswerCount)
         if (pending > 0) {
           yield* Effect.log("Forwarding answer to plan session")
@@ -308,7 +314,7 @@ export const runEventLoop = Effect.gen(function*() {
           yield* Ref.set(pendingFollowUp, Option.some(msg.text))
           yield* notifier.sendMessage({
             text: "Send as follow-up or interrupt Claude?",
-            options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }]
+            options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }, { label: OMIT_BUTTON_LABEL }]
           })
         }
       }
