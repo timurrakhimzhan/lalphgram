@@ -108,6 +108,7 @@ const PLAN_TYPE_LABELS = [
 export const APPROVE_BUTTON_LABEL = "Approve"
 export const BUFFER_BUTTON_LABEL = "Buffer"
 export const INTERRUPT_BUTTON_LABEL = "Interrupt"
+export const OMIT_BUTTON_LABEL = "Omit"
 
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
