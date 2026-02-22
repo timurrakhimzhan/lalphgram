@@ -168,3 +168,15 @@ All messages are JSON objects with a `type` field.
 5. Sends answers back via plain text on stdin
 6. Sends control messages (`follow_up`, `shim_interrupt`, `shim_approve`, `shim_abort`) on stdin
 7. On scope close, process is terminated
+
+---
+
+## Spec File Detection (Cross-Package)
+
+The shim has **no awareness** of spec files — it streams all SDK messages (including `tool_use` blocks with `file_path`) as-is to stdout. The spec file conventions are established upstream and consumed downstream:
+
+1. **Origin of `.specs/` and `plan.json` conventions** — The external `lalph` tool's system prompt (`repos/lalph/src/PromptGen.ts` → `planPrompt`) instructs Claude to write specs to `.specs/` and `plan.json`
+2. **Origin of `.specs/analysis.md` convention** — `notifications/src/lib/AnalysisPrompts.ts` (`getAnalysisPrompt`) generates follow-up prompts that tell Claude to write analysis to `.specs/analysis.md`. These are sent as `follow_up` stdin messages through the shim
+3. **Detection** — `notifications/src/services/PlanSession.ts` parses the NDJSON stream from the shim, extracts `file_path` from `Write`/`Edit`/`NotebookEdit` `tool_use` blocks, and classifies paths via `isSpecFile` / `isAnalysisFile` to emit typed events (`PlanSpecCreated`, `PlanSpecUpdated`, `PlanAnalysisReady`)
+
+The shim's role is purely transport — it neither inspects nor transforms file paths.
