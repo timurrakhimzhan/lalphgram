@@ -72,23 +72,19 @@ export const shimProgram = Effect.gen(function*() {
   const model = parsed.model ?? config.claudeModel
 
   // Output queues, drained through sinks as a single stream each
-  const outQueue = yield* Queue.unbounded<string | null>()
-  const errQueue = yield* Queue.unbounded<string | null>()
+  const outQueue = yield* Queue.unbounded<string>()
+  const errQueue = yield* Queue.unbounded<string>()
   const outFiber = yield* Stream.fromQueue(outQueue).pipe(
-    Stream.takeWhile((s): s is string => s !== null),
     Stream.run(deps.stdout),
     Effect.fork
   )
   const errFiber = yield* Stream.fromQueue(errQueue).pipe(
-    Stream.takeWhile((s): s is string => s !== null),
     Stream.run(deps.stderr),
     Effect.fork
   )
   yield* Effect.addFinalizer(() =>
-    Queue.offer(outQueue, null).pipe(
-      Effect.andThen(Queue.offer(errQueue, null)),
-      Effect.andThen(Fiber.join(outFiber).pipe(Effect.ignore)),
-      Effect.andThen(Fiber.join(errFiber).pipe(Effect.ignore))
+    Effect.all([Queue.shutdown(outQueue), Queue.shutdown(errQueue)]).pipe(
+      Effect.andThen(Fiber.joinAll([outFiber, errFiber]).pipe(Effect.ignore))
     )
   )
   const writeStdout = (data: string) => Queue.offer(outQueue, data).pipe(Effect.asVoid)
@@ -208,7 +204,7 @@ export const shimProgram = Effect.gen(function*() {
       })
     ),
     Stream.runDrain,
-    Effect.forkDaemon
+    Effect.forkScoped
   )
 
   // Handshake: signal readiness and wait for control message
