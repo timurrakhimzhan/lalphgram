@@ -5,8 +5,8 @@
  */
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import * as NodeStream from "@effect/platform-node/NodeStream"
-import { Context, Data, Effect, Either, Queue, Ref, Stream } from "effect"
+
+import { Config, Context, Data, Effect, Either, Queue, Ref, Stream } from "effect"
 import { z } from "zod/v4"
 import { parseArgs } from "./parseArgs.js"
 import { decodeShimMessage } from "./schemas.js"
@@ -20,13 +20,28 @@ export class ShimError extends Data.TaggedError("ShimError")<{
   readonly cause: unknown
 }> {}
 
+// --- Query Service ---
+
+export type QueryParams = Parameters<typeof query>[0]
+
+export class ClaudeQuery extends Context.Tag("ClaudeQuery")<ClaudeQuery, {
+  readonly create: (params: QueryParams) => Effect.Effect<Query, ShimError>
+}>() {}
+
+// --- Config ---
+
+export const ShimConfig = Config.all({
+  realClaudePath: Config.string("REAL_CLAUDE_PATH"),
+  claudeModel: Config.withDefault(Config.string("CLAUDE_MODEL"), "claude-opus-4-6")
+})
+
+// --- IO Deps ---
+
 export interface ShimDepsService {
   readonly args: ReadonlyArray<string>
-  readonly createQuery: typeof query
-  readonly stdout: { write(data: string): boolean }
-  readonly stderr: { write(data: string): boolean }
-  readonly stdin: NodeJS.ReadableStream
-  readonly env: Record<string, string | undefined>
+  readonly stdin: Stream.Stream<Uint8Array>
+  readonly stdout: { readonly write: (data: string) => boolean }
+  readonly stderr: { readonly write: (data: string) => boolean }
 }
 
 export class ShimDeps extends Context.Tag("ShimDeps")<ShimDeps, ShimDepsService>() {}
@@ -89,15 +104,11 @@ type FollowUpItem = SDKUserMessage | typeof FollowUpStop
 
 export const shimProgram = Effect.gen(function*() {
   const deps = yield* ShimDeps
+  const queryService = yield* ClaudeQuery
+  const config = yield* ShimConfig
   const parsed = parseArgs(deps.args)
 
-  const realClaudePath = deps.env["REAL_CLAUDE_PATH"]
-  if (!realClaudePath) {
-    yield* Effect.logError("REAL_CLAUDE_PATH environment variable is required")
-    return yield* new ShimError({ message: "REAL_CLAUDE_PATH not set", cause: null })
-  }
-
-  const model = parsed.model ?? deps.env["CLAUDE_MODEL"] ?? "claude-sonnet-4-6"
+  const model = parsed.model ?? config.claudeModel
 
   // State refs
   const answerQueue = yield* Queue.unbounded<string>()
@@ -117,10 +128,7 @@ export const shimProgram = Effect.gen(function*() {
   const mcpServer = createAskUserMcpServer(answerQueue, closedRef, deps.stderr)
 
   // Fork stdin reader daemon
-  yield* NodeStream.fromReadable<ShimError>(
-    () => deps.stdin,
-    (err) => new ShimError({ message: "stdin read error", cause: err })
-  ).pipe(
+  yield* deps.stdin.pipe(
     Stream.decodeText(),
     Stream.splitLines,
     Stream.mapEffect((line) =>
@@ -225,11 +233,11 @@ export const shimProgram = Effect.gen(function*() {
     session_id: ""
   })
 
-  const q: Query = deps.createQuery({
+  const q = yield* queryService.create({
     prompt: followUpIterable,
     options: {
       model,
-      pathToClaudeCodeExecutable: realClaudePath,
+      pathToClaudeCodeExecutable: config.realClaudePath,
       mcpServers: { "ask-user": mcpServer },
       disallowedTools: ["AskUserQuestion"],
       ...(parsed.dangerouslySkipPermissions

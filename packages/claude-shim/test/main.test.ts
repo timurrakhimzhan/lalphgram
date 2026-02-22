@@ -1,7 +1,9 @@
+import type { Query } from "@anthropic-ai/claude-agent-sdk"
+import * as NodeStream from "@effect/platform-node/NodeStream"
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Effect, Layer, Queue, Ref } from "effect"
+import { ConfigProvider, Effect, Layer, Queue, Ref, Stream } from "effect"
 import { PassThrough } from "node:stream"
-import { collectAnswers, ShimDeps, type ShimDepsService, shimProgram } from "../src/main.js"
+import { ClaudeQuery, collectAnswers, ShimDeps, ShimError, shimProgram } from "../src/main.js"
 
 const SHIM_START_LINE = JSON.stringify({ type: "shim_start" }) + "\n"
 const SHIM_ABORT_LINE = JSON.stringify({ type: "shim_abort" }) + "\n"
@@ -53,12 +55,45 @@ function createMockQuery(messages: ReadonlyArray<Record<string, unknown>>) {
   })
 }
 
+function stdinFromPassThrough(pt: PassThrough): Stream.Stream<Uint8Array> {
+  return NodeStream.fromReadable(
+    () => pt,
+    (err) => err
+  ).pipe(Stream.orDie)
+}
+
+function makeTestLayer(opts: {
+  readonly args: ReadonlyArray<string>
+  readonly stdinStream: PassThrough
+  readonly mockCreateQuery: ReturnType<typeof vi.fn>
+  readonly stdout?: { readonly write: (data: string) => boolean }
+  readonly stderr?: { readonly write: (data: string) => boolean }
+  readonly env?: Record<string, string>
+}): Layer.Layer<ShimDeps | ClaudeQuery> {
+  const envMap = new Map(Object.entries(opts.env ?? { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }))
+  return Layer.mergeAll(
+    Layer.succeed(ShimDeps, {
+      args: opts.args,
+      stdin: stdinFromPassThrough(opts.stdinStream),
+      stdout: opts.stdout ?? { write: vi.fn(() => true) },
+      stderr: opts.stderr ?? { write: vi.fn(() => true) }
+    }),
+    Layer.succeed(ClaudeQuery, {
+      create: (params): Effect.Effect<Query, ShimError> => {
+        opts.mockCreateQuery(params)
+        return Effect.succeed(opts.mockCreateQuery.mock.results.at(-1)?.value as Query)
+      }
+    }),
+    Layer.setConfigProvider(ConfigProvider.fromMap(envMap))
+  )
+}
+
 function createMockDeps(overrides?: {
   readonly args?: ReadonlyArray<string>
-  readonly env?: Record<string, string | undefined>
+  readonly env?: Record<string, string>
   readonly messages?: ReadonlyArray<Record<string, unknown>>
 }): {
-  deps: ShimDepsService
+  layer: Layer.Layer<ShimDeps | ClaudeQuery>
   stdinStream: PassThrough
   written: Array<string>
   mockCreateQuery: ReturnType<typeof vi.fn>
@@ -75,21 +110,20 @@ function createMockDeps(overrides?: {
   // Pre-write shim_start so the handshake completes automatically
   stdinStream.write(SHIM_START_LINE)
 
-  const deps: ShimDepsService = {
+  const layer = makeTestLayer({
     args: overrides?.args ?? [],
-    createQuery: mockCreateQuery,
+    stdinStream,
+    mockCreateQuery,
     stdout: {
       write: vi.fn((data: string) => {
         written.push(data)
         return true
       })
     },
-    stderr: { write: vi.fn(() => true) },
-    stdin: stdinStream,
-    env: overrides?.env ?? { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-  }
+    ...(overrides?.env !== undefined ? { env: overrides.env } : {})
+  })
 
-  return { deps, stdinStream, written, mockCreateQuery, mockQuery }
+  return { layer, stdinStream, written, mockCreateQuery, mockQuery }
 }
 
 function createCustomMockQuery(
@@ -186,7 +220,7 @@ describe("collectAnswers", () => {
 
 describe("shimProgram", () => {
   it.effect("creates query with MCP server and disallowed tools", () => {
-    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+    const { layer, mockCreateQuery, stdinStream } = createMockDeps({
       args: ["--dangerously-skip-permissions", "Plan this"]
     })
     stdinStream.end()
@@ -201,7 +235,7 @@ describe("shimProgram", () => {
             [Symbol.asyncIterator]: expect.any(Function)
           }),
           options: expect.objectContaining({
-            model: "claude-sonnet-4-6",
+            model: "claude-opus-4-6",
             pathToClaudeCodeExecutable: "/usr/local/bin/claude",
             permissionMode: "bypassPermissions",
             disallowedTools: ["AskUserQuestion"],
@@ -211,11 +245,11 @@ describe("shimProgram", () => {
           })
         })
       )
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("uses model from --model arg over env var", () => {
-    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+    const { layer, mockCreateQuery, stdinStream } = createMockDeps({
       args: ["--model", "claude-opus-4-6", "Hello"],
       env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
     })
@@ -230,11 +264,11 @@ describe("shimProgram", () => {
           options: expect.objectContaining({ model: "claude-opus-4-6" })
         })
       )
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("uses CLAUDE_MODEL env var when no --model arg", () => {
-    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+    const { layer, mockCreateQuery, stdinStream } = createMockDeps({
       args: ["Hello"],
       env: { REAL_CLAUDE_PATH: "/usr/bin/claude", CLAUDE_MODEL: "claude-haiku-4-5" }
     })
@@ -249,7 +283,7 @@ describe("shimProgram", () => {
           options: expect.objectContaining({ model: "claude-haiku-4-5" })
         })
       )
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("streams NDJSON to stdout and stops on result", () => {
@@ -258,7 +292,7 @@ describe("shimProgram", () => {
       { type: "assistant", message: { content: [{ type: "text", text: "Hello" }] } },
       { type: "result", subtype: "success" }
     ]
-    const { deps, stdinStream, written } = createMockDeps({
+    const { layer, stdinStream, written } = createMockDeps({
       args: ["Do something"],
       messages
     })
@@ -273,11 +307,11 @@ describe("shimProgram", () => {
       expect(JSON.parse(written[1]!)).toEqual(messages[0])
       expect(JSON.parse(written[2]!)).toEqual(messages[1])
       expect(JSON.parse(written[3]!)).toEqual(messages[2])
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("closes query via finalizer", () => {
-    const { deps, mockQuery, stdinStream } = createMockDeps({
+    const { layer, mockQuery, stdinStream } = createMockDeps({
       args: ["Hello"]
     })
     stdinStream.end()
@@ -287,28 +321,22 @@ describe("shimProgram", () => {
 
       // Assert
       expect(mockQuery.close).toHaveBeenCalledTimes(1)
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
-  it.effect("fails with ShimError when REAL_CLAUDE_PATH is not set", () => {
-    const { deps } = createMockDeps({ args: ["Hello"], env: {} })
+  it.effect("fails with ConfigError when REAL_CLAUDE_PATH is not set", () => {
+    const { layer } = createMockDeps({ args: ["Hello"], env: {} })
     return Effect.gen(function*() {
       // Act
       const result = yield* shimProgram.pipe(Effect.either)
 
       // Assert
       expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
-          _tag: "ShimError",
-          message: "REAL_CLAUDE_PATH not set"
-        })
-      }
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("passes initial prompt as first message in prompt iterable", () => {
-    const { deps, mockCreateQuery, stdinStream } = createMockDeps({
+    const { layer, mockCreateQuery, stdinStream } = createMockDeps({
       args: ["Do something"]
     })
     stdinStream.end()
@@ -324,7 +352,7 @@ describe("shimProgram", () => {
         message: { role: "user", content: "Do something" },
         session_id: ""
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("routes follow_up JSON lines to prompt iterable instead of collectAnswers", () => {
@@ -343,14 +371,12 @@ describe("shimProgram", () => {
     })()
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+
+    const layer = makeTestLayer({
       args: ["Do something"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -370,12 +396,12 @@ describe("shimProgram", () => {
         parent_tool_use_id: null,
         session_id: "test-session"
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("writes shim_ready to stdout before query creation", () => {
     // Arrange
-    const { deps, stdinStream, written } = createMockDeps({
+    const { layer, stdinStream, written } = createMockDeps({
       args: ["Do something"]
     })
     stdinStream.end()
@@ -387,7 +413,7 @@ describe("shimProgram", () => {
       // Assert
       expect(written.length).toBeGreaterThanOrEqual(1)
       expect(JSON.parse(written[0]!)).toEqual({ type: "shim_ready" })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("exits cleanly on shim_abort", () => {
@@ -398,19 +424,17 @@ describe("shimProgram", () => {
     stdinStream.end()
 
     const mockCreateQuery = vi.fn()
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Do something"],
-      createQuery: mockCreateQuery,
+      stdinStream,
+      mockCreateQuery,
       stdout: {
         write: vi.fn((data: string) => {
           written.push(data)
           return true
         })
-      },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      }
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -420,7 +444,7 @@ describe("shimProgram", () => {
       expect(written).toHaveLength(1)
       expect(JSON.parse(written[0]!)).toEqual({ type: "shim_ready" })
       expect(mockCreateQuery).not.toHaveBeenCalled()
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("fails with ShimError on unexpected control message", () => {
@@ -429,14 +453,11 @@ describe("shimProgram", () => {
     stdinStream.write(JSON.stringify({ type: "unknown" }) + "\n")
     stdinStream.end()
 
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Do something"],
-      createQuery: vi.fn(),
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery: vi.fn()
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -450,7 +471,7 @@ describe("shimProgram", () => {
           message: expect.stringContaining("Unexpected control message")
         })
       }
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 })
 
@@ -471,14 +492,11 @@ describe("shimProgram post-handshake control", () => {
 
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Plan this"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -497,7 +515,7 @@ describe("shimProgram post-handshake control", () => {
         message: { role: "user", content: "Approved! Build it." },
         session_id: "test-session"
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("uses default approve text when shim_approve has no text field", () => {
@@ -514,14 +532,11 @@ describe("shimProgram post-handshake control", () => {
 
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Plan this"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -540,7 +555,7 @@ describe("shimProgram post-handshake control", () => {
         message: { role: "user", content: "The user has approved. Proceed with implementation." },
         session_id: "test-session"
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("closes queue without offering on post-handshake shim_abort", () => {
@@ -557,14 +572,11 @@ describe("shimProgram post-handshake control", () => {
 
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Plan this"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -578,7 +590,7 @@ describe("shimProgram post-handshake control", () => {
         message: { role: "user", content: "Plan this" },
         session_id: ""
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("calls q.interrupt() and offers text on shim_interrupt", () => {
@@ -595,14 +607,11 @@ describe("shimProgram post-handshake control", () => {
 
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Plan this"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -622,7 +631,7 @@ describe("shimProgram post-handshake control", () => {
         message: { role: "user", content: "urgent fix needed" },
         session_id: "test-session"
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 
   it.effect("handles follow_up then shim_approve in sequence", () => {
@@ -642,14 +651,11 @@ describe("shimProgram post-handshake control", () => {
 
     const mockQuery = createCustomMockQuery(gen)
     const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const deps: ShimDepsService = {
+    const layer = makeTestLayer({
       args: ["Plan this"],
-      createQuery: mockCreateQuery,
-      stdout: { write: vi.fn(() => true) },
-      stderr: { write: vi.fn(() => true) },
-      stdin: stdinStream,
-      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
-    }
+      stdinStream,
+      mockCreateQuery
+    })
 
     return Effect.gen(function*() {
       // Act
@@ -671,6 +677,6 @@ describe("shimProgram post-handshake control", () => {
         type: "user",
         message: { role: "user", content: "Looks good, proceed" }
       })
-    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+    }).pipe(Effect.provide(layer))
   })
 })
