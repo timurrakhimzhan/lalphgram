@@ -109,6 +109,7 @@ export const APPROVE_BUTTON_LABEL = "Approve"
 export const BUFFER_BUTTON_LABEL = "Buffer"
 export const INTERRUPT_BUTTON_LABEL = "Interrupt"
 export const OMIT_BUTTON_LABEL = "Omit"
+export const ABORT_BUTTON_LABEL = "Abort"
 
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
@@ -215,7 +216,7 @@ export const runEventLoop = Effect.gen(function*() {
         yield* Effect.log("Plan type selection shown")
         yield* notifier.sendMessage({
           text: "What type of change?",
-          options: PLAN_TYPE_LABELS.map((label) => ({ label }))
+          options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
         })
         return
       }
@@ -228,8 +229,25 @@ export const runEventLoop = Effect.gen(function*() {
         yield* Ref.set(planBuffer, [])
         yield* notifier.sendMessage({
           text: "Describe what you'd like to plan. Tap <b>Done</b> when ready.",
-          replyKeyboard: [{ label: DONE_BUTTON_LABEL }]
+          replyKeyboard: [{ label: DONE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
         })
+        return
+      }
+      if (msg.text === ABORT_BUTTON_LABEL) {
+        yield* Ref.set(collectingPlan, false)
+        yield* Ref.set(planBuffer, [])
+        yield* Ref.set(planType, Option.none())
+        yield* Ref.set(pendingFollowUp, Option.none())
+        yield* Ref.set(pendingAnswerCount, 0)
+        const active = yield* planSession.isActive
+        if (active) {
+          yield* planSession.reject.pipe(
+            Effect.tapError((err) => Effect.logError(`Plan abort error: ${err.message}`)),
+            Effect.orElseSucceed(() => undefined)
+          )
+        }
+        yield* Effect.log("Plan session aborted")
+        yield* notifier.sendMessage("Plan aborted.")
         return
       }
       const isCollecting = yield* Ref.get(collectingPlan)
@@ -250,7 +268,10 @@ export const runEventLoop = Effect.gen(function*() {
           Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
           Effect.orElseSucceed(() => undefined)
         )
-        yield* notifier.sendMessage("Planning started...")
+        yield* notifier.sendMessage({
+          text: "Planning started...",
+          replyKeyboard: [{ label: ABORT_BUTTON_LABEL }]
+        })
         return
       }
       if (isCollecting) {
@@ -314,7 +335,12 @@ export const runEventLoop = Effect.gen(function*() {
           yield* Ref.set(pendingFollowUp, Option.some(msg.text))
           yield* notifier.sendMessage({
             text: "Send as follow-up or interrupt Claude?",
-            options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }, { label: OMIT_BUTTON_LABEL }]
+            options: [
+              { label: BUFFER_BUTTON_LABEL },
+              { label: INTERRUPT_BUTTON_LABEL },
+              { label: OMIT_BUTTON_LABEL },
+              { label: ABORT_BUTTON_LABEL }
+            ]
           })
         }
       }
@@ -349,7 +375,7 @@ export const runEventLoop = Effect.gen(function*() {
         Match.tag("PlanSpecReady", () =>
           notifier.sendMessage({
             text: "Spec ready. Reply with questions or approve to proceed.",
-            replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }]
+            replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
           })),
         Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
         Match.tag("PlanFailed", (e) => notifier.sendMessage(`Plan failed: ${e.message}`)),

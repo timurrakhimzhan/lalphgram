@@ -17,6 +17,7 @@ import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfi
 import { AutoMerge } from "../src/services/AutoMerge.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
 import {
+  ABORT_BUTTON_LABEL,
   APPROVE_BUTTON_LABEL,
   BUFFER_BUTTON_LABEL,
   BUG_BUTTON_LABEL,
@@ -441,7 +442,8 @@ describe("multi-step plan input", () => {
             { label: FEATURE_BUTTON_LABEL },
             { label: BUG_BUTTON_LABEL },
             { label: REFACTOR_BUTTON_LABEL },
-            { label: OTHER_BUTTON_LABEL }
+            { label: OTHER_BUTTON_LABEL },
+            { label: ABORT_BUTTON_LABEL }
           ]
         })
       )
@@ -466,7 +468,7 @@ describe("multi-step plan input", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: expect.stringContaining("Done"),
-          replyKeyboard: [{ label: "Done" }]
+          replyKeyboard: [{ label: "Done" }, { label: ABORT_BUTTON_LABEL }]
         })
       )
     }).pipe(Effect.provide(layer))
@@ -514,7 +516,12 @@ describe("multi-step plan input", () => {
 
       // Assert
       expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT")
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Planning started...")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Planning started...",
+          replyKeyboard: [{ label: ABORT_BUTTON_LABEL }]
+        })
+      )
     }).pipe(Effect.provide(layer))
   })
 
@@ -566,7 +573,7 @@ describe("plan spec approval", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Spec ready. Reply with questions or approve to proceed.",
-          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }]
+          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
         })
       )
     }).pipe(Effect.provide(layer))
@@ -632,7 +639,12 @@ describe("follow-up buffer vs interrupt choice", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Send as follow-up or interrupt Claude?",
-          options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }, { label: OMIT_BUTTON_LABEL }]
+          options: [
+            { label: BUFFER_BUTTON_LABEL },
+            { label: INTERRUPT_BUTTON_LABEL },
+            { label: OMIT_BUTTON_LABEL },
+            { label: ABORT_BUTTON_LABEL }
+          ]
         })
       )
     }).pipe(Effect.provide(layer))
@@ -730,6 +742,94 @@ describe("follow-up buffer vs interrupt choice", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         "Claude interrupted — processing your message now."
       )
+    }).pipe(Effect.provide(layer))
+  })
+})
+
+describe("plan abort", () => {
+  it.live("aborts during collection mode", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
+      new IncomingMessage({ chatId: "1", text: "Add auth", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const planSessionMock = makePlanSessionMock()
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(planSessionMock.start).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Plan aborted.")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("aborts active plan session", () => {
+    // Arrange
+    const rejectFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: rejectFn(),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.make(
+      new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" })
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(rejectFn).toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Plan aborted.")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("aborts and clears pending follow-up", () => {
+    // Arrange
+    const rejectFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: rejectFn(),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(rejectFn).toHaveBeenCalled()
+      expect(planSessionMock.sendFollowUp).not.toHaveBeenCalled()
+      expect(planSessionMock.interrupt).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Plan aborted.")
     }).pipe(Effect.provide(layer))
   })
 })
