@@ -18,16 +18,33 @@ Replaces the real `claude` CLI with an SDK-based wrapper that:
 
 ## Exports
 
+### `ClaudeQuery` (Context.Tag)
+SDK query factory — separated from IO deps for clean DI:
+```ts
+ClaudeQuery: {
+  create: (params: QueryParams) => Effect<Query, ShimError>
+}
+```
+`QueryParams` is `Parameters<typeof query>[0]` (prompt + options from SDK).
+
+### `ShimConfig` (Config)
+Strictly typed env config via `Config.all`. Fails with `ConfigError` if `REAL_CLAUDE_PATH` is missing:
+```ts
+{
+  realClaudePath: string              // REAL_CLAUDE_PATH (required)
+  claudeModel: string                 // CLAUDE_MODEL (default: "claude-opus-4-6")
+}
+```
+In production, reads from `process.env` via default `ConfigProvider`. In tests, override with `ConfigProvider.fromMap`.
+
 ### `ShimDeps` (Context.Tag)
-Injectable dependencies for testing:
+IO dependencies (args, streams):
 ```ts
 interface ShimDepsService {
-  args: ReadonlyArray<string>        // CLI args (minus program name)
-  createQuery: typeof query           // SDK query factory
+  args: ReadonlyArray<string>           // CLI args (minus program name)
+  stdin: Stream.Stream<Uint8Array>      // Effect stream (NodeStream.stdin in prod)
   stdout: { write(data: string): boolean }
   stderr: { write(data: string): boolean }
-  stdin: NodeJS.ReadableStream
-  env: Record<string, string | undefined>
 }
 ```
 
@@ -35,7 +52,7 @@ interface ShimDepsService {
 `{ message: string, cause: unknown }`
 
 ### `shimProgram` (Effect)
-The main program. Requires `ShimDeps` in context. Scoped (uses finalizers).
+The main program. Requires `ShimDeps | ClaudeQuery` in context + `ConfigProvider` for env. Scoped (uses finalizers).
 
 ### `parseArgs(args): ParsedArgs`
 Returns `{ prompt: string, dangerouslySkipPermissions: boolean, model: string | null }`.
@@ -56,7 +73,7 @@ Creates MCP server with one tool: `ask_user`.
 ### 1. Initialization
 - Parse CLI args via `parseArgs`
 - Read `REAL_CLAUDE_PATH` env var (required — path to actual claude binary)
-- Resolve model: `--model` flag > `CLAUDE_MODEL` env > `"claude-sonnet-4-6"`
+- Resolve model: `--model` flag > `CLAUDE_MODEL` env > `"claude-opus-4-6"`
 - Create state: `answerQueue`, `closedRef`, `routingActive`, `queryHandleRef`, `sessionIdRef`, `followUpQueue`
 
 ### 2. Stdin Reader (forked daemon)
