@@ -4,6 +4,7 @@
  */
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
 import { Context, Data, Effect, Exit, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
+import type { ContentBlock } from "../lib/StreamJsonParser.js"
 import { AskUserQuestionInput, StreamJsonMessage } from "../lib/StreamJsonParser.js"
 import { AppContext } from "./AppContext.js"
 
@@ -244,6 +245,125 @@ export const PlanSessionLive = Layer.scoped(
           }
         })
 
+        const tryParseLine = (line: string) =>
+          decodeJsonMessage(line).pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("ParseError", (err) =>
+              Effect.logWarning("stdout line is not valid JSON, treating as raw text").pipe(
+                Effect.annotateLogs({ rawLine: line.slice(0, 300), parseError: err.message.slice(0, 100) }),
+                Effect.map(() => Option.none<StreamJsonMessage>())
+              ))
+          )
+
+        const detectFileEvent = (block: typeof ContentBlock.Type) =>
+          Effect.gen(function*() {
+            const filePathResult = yield* Effect.gen(function*() {
+              switch (block.name) {
+                case "Write":
+                  return (yield* decodeWriteInput(block.input)).file_path
+                case "Edit":
+                  return (yield* decodeEditInput(block.input)).file_path
+                case "NotebookEdit":
+                  return (yield* decodeNotebookInput(block.input)).notebook_path
+                default:
+                  return yield* Effect.fail("not a file-writing tool")
+              }
+            }).pipe(Effect.option)
+            if (Option.isSome(filePathResult)) {
+              const fp = filePathResult.value
+              if (isAnalysisFile(fp)) {
+                yield* Effect.log("Analysis file detected").pipe(
+                  Effect.annotateLogs({ filePath: fp })
+                )
+                yield* Queue.offer(eventQueue, new PlanAnalysisReady({ filePath: fp }))
+              } else if (isSpecFile(fp)) {
+                const seen = yield* Ref.get(seenFilePaths)
+                if (seen.has(fp)) {
+                  yield* Effect.log("Spec file updated").pipe(
+                    Effect.annotateLogs({ filePath: fp })
+                  )
+                  yield* Queue.offer(eventQueue, new PlanSpecUpdated({ filePath: fp }))
+                } else {
+                  yield* Ref.update(seenFilePaths, (s) =>
+                    new Set([...s, fp]))
+                  yield* Effect.log("Spec file created").pipe(
+                    Effect.annotateLogs({ filePath: fp })
+                  )
+                  yield* Queue.offer(eventQueue, new PlanSpecCreated({ filePath: fp }))
+                }
+              }
+            }
+          })
+
+        const processContentBlock = (block: typeof ContentBlock.Type, messageId: string, hasAskUser: boolean) =>
+          Effect.gen(function*() {
+            if (block.type === "text" && block.text != null && hasAskUser) {
+              yield* Effect.log("Suppressing text block (ask_user in same line)")
+            } else if (block.type === "text" && block.text != null) {
+              yield* Effect.log("Buffering text block").pipe(
+                Effect.annotateLogs({ textLength: String(block.text.length), messageId })
+              )
+              yield* Ref.set(pendingTextRef, Option.some({ messageId, text: block.text }))
+            } else if (block.type === "tool_use" && block.name === "mcp__ask-user__ask_user") {
+              yield* Effect.log("ask_user MCP tool detected, discarding buffered text")
+              yield* Ref.set(pendingTextRef, Option.none())
+              const askParsed = yield* decodeAskInput(block.input).pipe(
+                Effect.orElseSucceed(() => ({ questions: undefined }))
+              )
+              if (askParsed.questions != null && askParsed.questions.length > 0) {
+                yield* Queue.offer(eventQueue, new PlanQuestion({ questions: askParsed.questions }))
+              }
+            } else if (block.type === "tool_use" && block.name != null) {
+              yield* Effect.log("Tool invoked").pipe(
+                Effect.annotateLogs({ tool: block.name })
+              )
+              yield* detectFileEvent(block)
+            }
+          })
+
+        const processAssistantMessage = (msg: StreamJsonMessage) =>
+          Effect.gen(function*() {
+            const content = msg.message?.content
+            if (content == null) return
+            const messageId = msg.message?.id ?? ""
+            const pending = yield* Ref.get(pendingTextRef)
+            if (Option.isSome(pending) && pending.value.messageId !== messageId) {
+              yield* flushPendingText
+            }
+            const hasAskUser = content.some(
+              (b) => b.type === "tool_use" && b.name === "mcp__ask-user__ask_user"
+            )
+            for (const block of content) {
+              yield* processContentBlock(block, messageId, hasAskUser)
+            }
+          })
+
+        const routeMessage = (msg: StreamJsonMessage) =>
+          Effect.gen(function*() {
+            yield* Effect.log("Parsed stream-json message").pipe(
+              Effect.annotateLogs({
+                messageType: msg.type,
+                ...(msg.subtype != null ? { subtype: msg.subtype } : {})
+              })
+            )
+            if (msg.type === "shim_ready") {
+              yield* Effect.log("shim_ready received, auto-sending shim_start")
+              const encoder = new TextEncoder()
+              yield* Queue.offer(stdinQueue, encoder.encode(JSON.stringify({ type: "shim_start" }) + "\n"))
+              return
+            }
+            if (msg.type === "result") {
+              yield* flushPendingText
+              yield* Effect.log("Planner result received")
+              return
+            }
+            if (msg.type !== "assistant" || msg.message?.content == null) {
+              yield* flushPendingText
+              return
+            }
+            yield* processAssistantMessage(msg)
+          })
+
         yield* process.stdout.pipe(
           Stream.map((chunk) => decoder.decode(chunk)),
           Stream.tap((chunk) =>
@@ -255,14 +375,7 @@ export const PlanSessionLive = Layer.scoped(
           Stream.filter((line) => line.trim().length > 0),
           Stream.mapEffect((line) =>
             Effect.gen(function*() {
-              const parsed = yield* decodeJsonMessage(line).pipe(
-                Effect.map(Option.some),
-                Effect.catchTag("ParseError", (err) =>
-                  Effect.logWarning("stdout line is not valid JSON, treating as raw text").pipe(
-                    Effect.annotateLogs({ rawLine: line.slice(0, 300), parseError: err.message.slice(0, 100) }),
-                    Effect.map(() => Option.none<StreamJsonMessage>())
-                  ))
-              )
+              const parsed = yield* tryParseLine(line)
               if (Option.isNone(parsed)) {
                 const cleaned = stripAnsi(line).trim()
                 if (cleaned.length > 0) {
@@ -272,95 +385,7 @@ export const PlanSessionLive = Layer.scoped(
                 }
                 return
               }
-              const msg = parsed.value
-              yield* Effect.log("Parsed stream-json message").pipe(
-                Effect.annotateLogs({
-                  messageType: msg.type,
-                  ...(msg.subtype != null ? { subtype: msg.subtype } : {})
-                })
-              )
-              if (msg.type === "shim_ready") {
-                yield* Effect.log("shim_ready received, auto-sending shim_start")
-                const encoder = new TextEncoder()
-                yield* Queue.offer(stdinQueue, encoder.encode(JSON.stringify({ type: "shim_start" }) + "\n"))
-                return
-              }
-              if (msg.type === "result") {
-                yield* flushPendingText
-                yield* Effect.log("Planner result received")
-                return
-              }
-              if (msg.type !== "assistant" || msg.message?.content == null) {
-                yield* flushPendingText
-                return
-              }
-              const messageId = msg.message.id ?? ""
-              const pending = yield* Ref.get(pendingTextRef)
-              if (Option.isSome(pending) && pending.value.messageId !== messageId) {
-                yield* flushPendingText
-              }
-              const hasAskUser = msg.message.content.some(
-                (b) =>
-                  b.type === "tool_use" && b.name === "mcp__ask-user__ask_user"
-              )
-              for (const block of msg.message.content) {
-                if (block.type === "text" && block.text != null && hasAskUser) {
-                  yield* Effect.log("Suppressing text block (ask_user in same line)")
-                } else if (block.type === "text" && block.text != null) {
-                  yield* Effect.log("Buffering text block").pipe(
-                    Effect.annotateLogs({ textLength: String(block.text.length), messageId })
-                  )
-                  yield* Ref.set(pendingTextRef, Option.some({ messageId, text: block.text }))
-                } else if (block.type === "tool_use" && block.name === "mcp__ask-user__ask_user") {
-                  yield* Effect.log("ask_user MCP tool detected, discarding buffered text")
-                  yield* Ref.set(pendingTextRef, Option.none())
-                  const askParsed = yield* decodeAskInput(block.input).pipe(
-                    Effect.orElseSucceed(() => ({ questions: undefined }))
-                  )
-                  if (askParsed.questions != null && askParsed.questions.length > 0) {
-                    yield* Queue.offer(eventQueue, new PlanQuestion({ questions: askParsed.questions }))
-                  }
-                } else if (block.type === "tool_use" && block.name != null) {
-                  yield* Effect.log("Tool invoked").pipe(
-                    Effect.annotateLogs({ tool: block.name })
-                  )
-                  const filePathResult = yield* Effect.gen(function*() {
-                    switch (block.name) {
-                      case "Write":
-                        return (yield* decodeWriteInput(block.input)).file_path
-                      case "Edit":
-                        return (yield* decodeEditInput(block.input)).file_path
-                      case "NotebookEdit":
-                        return (yield* decodeNotebookInput(block.input)).notebook_path
-                      default:
-                        return yield* Effect.fail("not a file-writing tool")
-                    }
-                  }).pipe(Effect.option)
-                  if (Option.isSome(filePathResult)) {
-                    const fp = filePathResult.value
-                    if (isAnalysisFile(fp)) {
-                      yield* Effect.log("Analysis file detected").pipe(
-                        Effect.annotateLogs({ filePath: fp })
-                      )
-                      yield* Queue.offer(eventQueue, new PlanAnalysisReady({ filePath: fp }))
-                    } else if (isSpecFile(fp)) {
-                      const seen = yield* Ref.get(seenFilePaths)
-                      if (seen.has(fp)) {
-                        yield* Effect.log("Spec file updated").pipe(
-                          Effect.annotateLogs({ filePath: fp })
-                        )
-                        yield* Queue.offer(eventQueue, new PlanSpecUpdated({ filePath: fp }))
-                      } else {
-                        yield* Ref.update(seenFilePaths, (s) => new Set([...s, fp]))
-                        yield* Effect.log("Spec file created").pipe(
-                          Effect.annotateLogs({ filePath: fp })
-                        )
-                        yield* Queue.offer(eventQueue, new PlanSpecCreated({ filePath: fp }))
-                      }
-                    }
-                  }
-                }
-              }
+              yield* routeMessage(parsed.value)
             })
           ),
           Stream.runDrain,
