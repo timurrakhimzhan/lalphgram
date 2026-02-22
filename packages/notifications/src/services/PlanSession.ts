@@ -57,13 +57,38 @@ export class PlanQuestion extends Data.TaggedClass("PlanQuestion")<{
  * @since 1.0.0
  * @category events
  */
-export class PlanSpecReady extends Data.TaggedClass("PlanSpecReady")<Record<string, never>> {}
+export class PlanSpecCreated extends Data.TaggedClass("PlanSpecCreated")<{
+  readonly filePath: string
+}> {}
 
 /**
  * @since 1.0.0
  * @category events
  */
-export type PlanEvent = PlanTextOutput | PlanQuestion | PlanCompleted | PlanFailed | PlanSpecReady
+export class PlanSpecUpdated extends Data.TaggedClass("PlanSpecUpdated")<{
+  readonly filePath: string
+}> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export class PlanAnalysisReady extends Data.TaggedClass("PlanAnalysisReady")<{
+  readonly filePath: string
+}> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type PlanEvent =
+  | PlanTextOutput
+  | PlanQuestion
+  | PlanCompleted
+  | PlanFailed
+  | PlanSpecCreated
+  | PlanSpecUpdated
+  | PlanAnalysisReady
 
 interface ActiveSession {
   readonly process: CommandExecutor.Process
@@ -109,6 +134,21 @@ const stripAnsi = (text: string): string =>
   // eslint-disable-next-line no-control-regex
   text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
 
+const WriteToolInput = Schema.Struct({ file_path: Schema.String })
+const EditToolInput = Schema.Struct({ file_path: Schema.String })
+const NotebookEditToolInput = Schema.Struct({ notebook_path: Schema.String })
+
+const decodeWriteInput = Schema.decodeUnknown(WriteToolInput)
+const decodeEditInput = Schema.decodeUnknown(EditToolInput)
+const decodeNotebookInput = Schema.decodeUnknown(NotebookEditToolInput)
+
+const isSpecFile = (path: string): boolean =>
+  ((path.includes(".specs/") || path.includes(".specs\\")) && !path.endsWith("analysis.md")) ||
+  path.endsWith(".lalph/plan.json")
+
+const isAnalysisFile = (path: string): boolean =>
+  path.endsWith(".specs/analysis.md") || path.endsWith(".specs\\analysis.md")
+
 const decodeAskInput = Schema.decodeUnknown(AskUserQuestionInput)
 const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
 
@@ -126,7 +166,7 @@ export const PlanSessionLive = Layer.scoped(
     const buildCommand = yield* PlanCommandBuilder
     const sessionRef = yield* Ref.make<Option.Option<ActiveSession>>(Option.none())
     const eventQueue = yield* Queue.unbounded<PlanEvent>()
-    const specReadyEmitted = yield* Ref.make(false)
+    const seenFilePaths = yield* Ref.make<ReadonlySet<string>>(new Set())
 
     const closeActiveSession = Effect.gen(function*() {
       const current = yield* Ref.get(sessionRef)
@@ -148,7 +188,7 @@ export const PlanSessionLive = Layer.scoped(
           })
         }
 
-        yield* Ref.set(specReadyEmitted, false)
+        yield* Ref.set(seenFilePaths, new Set())
 
         const tempDir = pathService.join(appContext.configDir, "tmp")
         yield* fs.makeDirectory(tempDir, { recursive: true }).pipe(
@@ -247,11 +287,7 @@ export const PlanSessionLive = Layer.scoped(
               }
               if (msg.type === "result") {
                 yield* flushPendingText
-                const alreadyEmitted = yield* Ref.getAndSet(specReadyEmitted, true)
-                if (!alreadyEmitted) {
-                  yield* Effect.log("Planner result received, emitting PlanSpecReady")
-                  yield* Queue.offer(eventQueue, new PlanSpecReady({}))
-                }
+                yield* Effect.log("Planner result received")
                 return
               }
               if (msg.type !== "assistant" || msg.message?.content == null) {
@@ -288,6 +324,41 @@ export const PlanSessionLive = Layer.scoped(
                   yield* Effect.log("Tool invoked").pipe(
                     Effect.annotateLogs({ tool: block.name })
                   )
+                  const filePathResult = yield* Effect.gen(function*() {
+                    switch (block.name) {
+                      case "Write":
+                        return (yield* decodeWriteInput(block.input)).file_path
+                      case "Edit":
+                        return (yield* decodeEditInput(block.input)).file_path
+                      case "NotebookEdit":
+                        return (yield* decodeNotebookInput(block.input)).notebook_path
+                      default:
+                        return yield* Effect.fail("not a file-writing tool")
+                    }
+                  }).pipe(Effect.option)
+                  if (Option.isSome(filePathResult)) {
+                    const fp = filePathResult.value
+                    if (isAnalysisFile(fp)) {
+                      yield* Effect.log("Analysis file detected").pipe(
+                        Effect.annotateLogs({ filePath: fp })
+                      )
+                      yield* Queue.offer(eventQueue, new PlanAnalysisReady({ filePath: fp }))
+                    } else if (isSpecFile(fp)) {
+                      const seen = yield* Ref.get(seenFilePaths)
+                      if (seen.has(fp)) {
+                        yield* Effect.log("Spec file updated").pipe(
+                          Effect.annotateLogs({ filePath: fp })
+                        )
+                        yield* Queue.offer(eventQueue, new PlanSpecUpdated({ filePath: fp }))
+                      } else {
+                        yield* Ref.update(seenFilePaths, (s) => new Set([...s, fp]))
+                        yield* Effect.log("Spec file created").pipe(
+                          Effect.annotateLogs({ filePath: fp })
+                        )
+                        yield* Queue.offer(eventQueue, new PlanSpecCreated({ filePath: fp }))
+                      }
+                    }
+                  }
                 }
               }
             })

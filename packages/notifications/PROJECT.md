@@ -365,37 +365,35 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 
 ## EventLoop (`services/EventLoop.ts`)
 
-### State
-- `collectingPlan: Ref<boolean>` — currently collecting plan text from user
-- `planBuffer: Ref<string[]>` — buffered plan lines
-- `planType: Ref<Option<string>>` — selected plan type (Feature/Bug/Refactor/Other)
-- `pendingAnswerCount: Ref<number>` — how many answers Claude is waiting for
-- `pendingFollowUp: Ref<Option<string>>` — message held for buffer/interrupt decision
+### State Machine (`ChatState`)
+Single `Ref<ChatState>` discriminated union with 7 states:
 
-### Button Labels
-`Plan`, `Feature`, `Bug`, `Refactor`, `Other`, `Done`, `Approve`, `Buffer`, `Interrupt`, `Omit`, `Abort`
+| State | Data | Reply Keyboard |
+|---|---|---|
+| `Idle` | — | [Plan] |
+| `SelectingPlanType` | — | (inline: Feature/Bug/Refactor/Other/Abort) |
+| `CollectingPlan` | `planType`, `buffer` | [Done, Abort] |
+| `SessionRunning` | — | [Abort] |
+| `AwaitingAnswers` | `remaining` | [Abort] |
+| `AwaitingFollowUpDecision` | `message` | (inline: Buffer/Interrupt/Omit/Abort) |
+| `SpecReady` | — | [Approve, Abort] |
 
-### Incoming Message Handling (priority order)
+### State Transitions (incoming messages)
 
-1. **"Plan"** → Show plan type selection keyboard (Feature/Bug/Refactor/Other)
-2. **Plan type selected** → Start collecting plan text, show Done/Abort
-3. **"Abort"** → Cancel plan collection or reject active session
-4. **"Done" while collecting** → Start plan session with buffered text
-5. **While collecting** → Buffer message line
-6. **Session active + "Approve"** → `planSession.approve`
-7. **Session active + "Buffer"** → `planSession.sendFollowUp(pendingFollowUp)`
-8. **Session active + "Interrupt"** → `planSession.interrupt(pendingFollowUp)`, send "Claude interrupted — processing your message now."
-9. **Session active + "Omit"** → Discard pending follow-up
-10. **Session active + pendingAnswerCount > 0** → `planSession.answer(text)`, decrement count
-11. **Session active + no pending answers** → Store in `pendingFollowUp`, show Buffer/Interrupt/Omit/Abort buttons
+- **Idle** + "Plan" → `SelectingPlanType`
+- **SelectingPlanType** + plan type → `CollectingPlan`; + "Abort" → `Idle`
+- **CollectingPlan** + text → buffer it; + "Done" → `SessionRunning` (start session); + "Abort" → `Idle`
+- **SessionRunning** + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
+- **AwaitingAnswers** + text → answer, decrement; if 0 remaining → `SessionRunning`; + "Abort" → reject + `Idle`
+- **AwaitingFollowUpDecision** + "Buffer"/"Interrupt"/"Omit" → handle + `SessionRunning`; + "Abort" → reject + `Idle`
+- **SpecReady** + "Approve" → approve + `SessionRunning`; + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
 
-### Plan Event Handling
+### State Transitions (plan events)
 
-- `PlanTextOutput` → Split via `splitMessage`, send each chunk to Telegram
-- `PlanQuestion` → Send each question with options as inline keyboard, increment `pendingAnswerCount`
-- `PlanSpecReady` → Show Approve/Abort buttons
-- `PlanCompleted` → Send completion notification
-- `PlanFailed` → Send error notification
+- `PlanTextOutput` → send text (no state change)
+- `PlanQuestion` → `AwaitingAnswers(N)` + "Please answer all N questions above."
+- `PlanSpecReady` → `SpecReady`
+- `PlanCompleted` / `PlanFailed` → `Idle` (with Plan button restored)
 
 ### App Event Dispatching
 

@@ -4,13 +4,15 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 import { AppContext } from "../src/services/AppContext.js"
 import {
+  PlanAnalysisReady,
   PlanCommandBuilder,
   PlanCompleted,
   PlanFailed,
   PlanQuestion,
   PlanSession,
   PlanSessionLive,
-  PlanSpecReady,
+  PlanSpecCreated,
+  PlanSpecUpdated,
   PlanTextOutput
 } from "../src/services/PlanSession.js"
 
@@ -29,6 +31,9 @@ const textMessage = (text: string, id?: string) => ndjsonMessage([{ type: "text"
 
 const askQuestionMessage = (questions: ReadonlyArray<Record<string, unknown>>, id?: string) =>
   ndjsonMessage([{ type: "tool_use", name: "mcp__ask-user__ask_user", input: { questions } }], id)
+
+const toolUseMessage = (name: string, input: Record<string, unknown>, id?: string) =>
+  ndjsonMessage([{ type: "tool_use", name, input }], id)
 
 const catCommandLayer = Layer.succeed(
   PlanCommandBuilder,
@@ -430,9 +435,108 @@ describe("PlanSession", () => {
       }).pipe(Effect.provide(testLayer))
     }))
 
-  it.live("emits PlanSpecReady on planner result message", () =>
+  it.live("emits PlanSpecCreated for Write to .specs/ file", () =>
     Effect.gen(function*() {
-      // Arrange — text message then a result message (simulates planner completing)
+      // Arrange
+      const payload = toolUseMessage("Write", { file_path: "/project/.specs/feature.md", content: "spec" })
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+
+        // Assert
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanSpecCreated"),
+          Stream.runHead
+        )
+        expect(event._tag).toBe("Some")
+        if (event._tag === "Some") {
+          expect(event.value).toBeInstanceOf(PlanSpecCreated)
+          expect(event.value).toMatchObject({ filePath: "/project/.specs/feature.md" })
+        }
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("emits PlanSpecUpdated on second write to same .specs/ file", () =>
+    Effect.gen(function*() {
+      // Arrange — two Write tool_use blocks for the same spec file in separate messages
+      const line1 = toolUseMessage("Write", { file_path: "/project/.specs/feature.md", content: "v1" }, "msg_1")
+      const line2 = toolUseMessage("Write", { file_path: "/project/.specs/feature.md", content: "v2" }, "msg_2")
+      const payload = `${line1}\n${line2}`
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+        yield* Effect.sleep("100 millis")
+
+        // Assert — first is Created, second is Updated
+        const events = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanSpecCreated" || e._tag === "PlanSpecUpdated"),
+          Stream.take(2),
+          Stream.runCollect
+        )
+        const arr = [...events]
+        expect(arr[0]).toBeInstanceOf(PlanSpecCreated)
+        expect(arr[1]).toBeInstanceOf(PlanSpecUpdated)
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("emits PlanAnalysisReady for Write to .specs/analysis.md", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const payload = toolUseMessage("Write", { file_path: "/project/.specs/analysis.md", content: "analysis" })
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+
+        // Assert
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanAnalysisReady"),
+          Stream.runHead
+        )
+        expect(event._tag).toBe("Some")
+        if (event._tag === "Some") {
+          expect(event.value).toBeInstanceOf(PlanAnalysisReady)
+          expect(event.value).toMatchObject({ filePath: "/project/.specs/analysis.md" })
+        }
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("does not emit spec events for non-spec file paths", () =>
+    Effect.gen(function*() {
+      // Arrange — Write to a regular file, not under .specs/
+      const payload = toolUseMessage("Write", { file_path: "/project/src/main.ts", content: "code" })
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+        yield* Effect.sleep("100 millis")
+
+        // Assert — only PlanCompleted should be emitted
+        const event = yield* Stream.runHead(session.events)
+        expect(event._tag).toBe("Some")
+        if (event._tag === "Some") {
+          expect(event.value).toBeInstanceOf(PlanCompleted)
+        }
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("result message no longer emits spec events", () =>
+    Effect.gen(function*() {
+      // Arrange — a result message without any spec file writes
       const resultLine = JSON.stringify({ type: "result", subtype: "success" })
       const payload = `${textMessage("spec output")}\n${resultLine}`
       const testLayer = makeTestLayer(echoCommandLayer(payload))
@@ -442,16 +546,18 @@ describe("PlanSession", () => {
 
         // Act
         yield* session.start("test plan")
+        yield* Effect.sleep("100 millis")
 
-        // Assert — should see PlanSpecReady event after the result
-        const event = yield* session.events.pipe(
-          Stream.filter((e) => e._tag === "PlanSpecReady"),
-          Stream.runHead
+        // Assert — no PlanSpecCreated/Updated/AnalysisReady events
+        const events = yield* session.events.pipe(
+          Stream.take(2),
+          Stream.runCollect
         )
-        expect(event._tag).toBe("Some")
-        if (event._tag === "Some") {
-          expect(event.value).toBeInstanceOf(PlanSpecReady)
-        }
+        const arr = [...events]
+        const specEvents = arr.filter((e) =>
+          e._tag === "PlanSpecCreated" || e._tag === "PlanSpecUpdated" || e._tag === "PlanAnalysisReady"
+        )
+        expect(specEvents).toHaveLength(0)
       }).pipe(Effect.provide(testLayer))
     }))
 
