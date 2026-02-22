@@ -10,6 +10,7 @@ import {
   PlanQuestion,
   PlanSession,
   PlanSessionLive,
+  PlanSpecReady,
   PlanTextOutput
 } from "../src/services/PlanSession.js"
 
@@ -366,6 +367,88 @@ describe("PlanSession", () => {
         // Assert — inactive after exit
         const after = yield* session.isActive
         expect(after).toBe(false)
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("auto-starts first shim on shim_ready", () =>
+    Effect.gen(function*() {
+      // Arrange — echo a shim_ready line followed by a text message
+      const shimReadyLine = JSON.stringify({ type: "shim_ready" })
+      const payload = `${shimReadyLine}\n${textMessage("spec output")}`
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+
+        // Assert — should see text output (shim_ready auto-started, text message emitted)
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanTextOutput"),
+          Stream.runHead
+        )
+        expect(event._tag).toBe("Some")
+        if (event._tag === "Some") {
+          expect(event.value).toMatchObject({ text: "spec output" })
+        }
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("emits PlanSpecReady on planner result message", () =>
+    Effect.gen(function*() {
+      // Arrange — text message then a result message (simulates planner completing)
+      const resultLine = JSON.stringify({ type: "result", subtype: "success" })
+      const payload = `${textMessage("spec output")}\n${resultLine}`
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+
+        // Assert — should see PlanSpecReady event after the result
+        const event = yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanSpecReady"),
+          Stream.runHead
+        )
+        expect(event._tag).toBe("Some")
+        if (event._tag === "Some") {
+          expect(event.value).toBeInstanceOf(PlanSpecReady)
+        }
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("approve fails when no session is active", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        const result = yield* session.approve.pipe(Effect.flip)
+
+        // Assert
+        expect(result.message).toBe("No active plan session")
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("reject fails when no session is active", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        const result = yield* session.reject.pipe(Effect.flip)
+
+        // Assert
+        expect(result.message).toBe("No active plan session")
       }).pipe(Effect.provide(testLayer))
     }))
 })

@@ -57,7 +57,13 @@ export class PlanQuestion extends Data.TaggedClass("PlanQuestion")<{
  * @since 1.0.0
  * @category events
  */
-export type PlanEvent = PlanTextOutput | PlanQuestion | PlanCompleted | PlanFailed
+export class PlanSpecReady extends Data.TaggedClass("PlanSpecReady")<Record<string, never>> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
+export type PlanEvent = PlanTextOutput | PlanQuestion | PlanCompleted | PlanFailed | PlanSpecReady
 
 interface ActiveSession {
   readonly process: CommandExecutor.Process
@@ -73,6 +79,8 @@ export interface PlanSessionService {
   readonly start: (planText: string) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
+  readonly approve: Effect.Effect<void, PlanSessionError>
+  readonly reject: Effect.Effect<void, PlanSessionError>
   readonly isActive: Effect.Effect<boolean>
   readonly events: Stream.Stream<PlanEvent, PlanSessionError>
 }
@@ -117,6 +125,7 @@ export const PlanSessionLive = Layer.scoped(
     const buildCommand = yield* PlanCommandBuilder
     const sessionRef = yield* Ref.make<Option.Option<ActiveSession>>(Option.none())
     const eventQueue = yield* Queue.unbounded<PlanEvent>()
+    const specReadyEmitted = yield* Ref.make(false)
 
     const closeActiveSession = Effect.gen(function*() {
       const current = yield* Ref.get(sessionRef)
@@ -137,6 +146,8 @@ export const PlanSessionLive = Layer.scoped(
             cause: null
           })
         }
+
+        yield* Ref.set(specReadyEmitted, false)
 
         const tempDir = pathService.join(appContext.configDir, "tmp")
         yield* fs.makeDirectory(tempDir, { recursive: true }).pipe(
@@ -227,6 +238,21 @@ export const PlanSessionLive = Layer.scoped(
                   ...(msg.subtype != null ? { subtype: msg.subtype } : {})
                 })
               )
+              if (msg.type === "shim_ready") {
+                yield* Effect.log("shim_ready received, auto-sending shim_start")
+                const encoder = new TextEncoder()
+                yield* Queue.offer(stdinQueue, encoder.encode(JSON.stringify({ type: "shim_start" }) + "\n"))
+                return
+              }
+              if (msg.type === "result") {
+                yield* flushPendingText
+                const alreadyEmitted = yield* Ref.getAndSet(specReadyEmitted, true)
+                if (!alreadyEmitted) {
+                  yield* Effect.log("Planner result received, emitting PlanSpecReady")
+                  yield* Queue.offer(eventQueue, new PlanSpecReady())
+                }
+                return
+              }
               if (msg.type !== "assistant" || msg.message?.content == null) {
                 yield* flushPendingText
                 return
@@ -355,6 +381,31 @@ export const PlanSessionLive = Layer.scoped(
         yield* Queue.offer(current.value.stdinQueue, encoder.encode(line))
       })
 
+    const approve = Effect.gen(function*() {
+      const current = yield* Ref.get(sessionRef)
+      if (Option.isNone(current)) {
+        return yield* new PlanSessionError({
+          message: "No active plan session",
+          cause: null
+        })
+      }
+      const encoder = new TextEncoder()
+      yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_start" }) + "\n"))
+    })
+
+    const reject = Effect.gen(function*() {
+      const current = yield* Ref.get(sessionRef)
+      if (Option.isNone(current)) {
+        return yield* new PlanSessionError({
+          message: "No active plan session",
+          cause: null
+        })
+      }
+      const encoder = new TextEncoder()
+      yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_abort" }) + "\n"))
+      yield* closeActiveSession
+    })
+
     const isActive = Ref.get(sessionRef).pipe(Effect.map(Option.isSome))
 
     const events: Stream.Stream<PlanEvent, PlanSessionError> = Stream.fromQueue(eventQueue).pipe(
@@ -365,6 +416,8 @@ export const PlanSessionLive = Layer.scoped(
       start: (planText) => start(planText).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       answer: (text) => answer(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       sendFollowUp: (text) => sendFollowUp(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      approve: approve.pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      reject: reject.pipe(Effect.annotateLogs({ service: "PlanSession" })),
       isActive,
       events
     })

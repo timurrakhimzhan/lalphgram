@@ -16,14 +16,19 @@ import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge } from "../src/services/AutoMerge.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
-import { PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
+import {
+  APPROVE_BUTTON_LABEL,
+  PLAN_BUTTON_LABEL,
+  REJECT_BUTTON_LABEL,
+  runEventLoop
+} from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
 import {
   IncomingMessage,
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
-import { PlanSession } from "../src/services/PlanSession.js"
+import { PlanSession, PlanSpecReady } from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
@@ -121,6 +126,8 @@ const makePlanSessionMock = () =>
     start: vi.fn(() => Effect.succeed(undefined)),
     answer: vi.fn(() => Effect.succeed(undefined)),
     sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+    approve: Effect.succeed(undefined),
+    reject: Effect.succeed(undefined),
     isActive: Effect.succeed(false),
     events: Stream.never
   })
@@ -453,6 +460,94 @@ describe("multi-step plan input", () => {
       // Assert
       expect(planSessionMock.start).not.toHaveBeenCalled()
       expect(messengerMock.sendMessage).toHaveBeenCalledWith("No plan description provided.")
+    }).pipe(Effect.provide(layer))
+  })
+})
+
+describe("plan spec approval", () => {
+  it.live("sends approval message with buttons on PlanSpecReady", () => {
+    // Arrange
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(false),
+      events: Stream.make(new PlanSpecReady())
+    })
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Spec ready. Review the output above, then approve to create tasks.",
+          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: REJECT_BUTTON_LABEL }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("calls approve on plan session when Approve button is tapped", () => {
+    // Arrange
+    const approveFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      approve: approveFn(),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.make(
+      new IncomingMessage({ chatId: "1", text: APPROVE_BUTTON_LABEL, from: "user" })
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(approveFn).toHaveBeenCalled()
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("calls reject on plan session and sends message when Reject button is tapped", () => {
+    // Arrange
+    const rejectFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: rejectFn(),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.make(
+      new IncomingMessage({ chatId: "1", text: REJECT_BUTTON_LABEL, from: "user" })
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(rejectFn).toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Plan rejected.")
     }).pipe(Effect.provide(layer))
   })
 })

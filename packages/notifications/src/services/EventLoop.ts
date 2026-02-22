@@ -100,6 +100,8 @@ const formatTelegramHtml = (text: string) =>
 
 export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
+export const APPROVE_BUTTON_LABEL = "Approve"
+export const REJECT_BUTTON_LABEL = "Reject"
 
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
@@ -240,6 +242,23 @@ export const runEventLoop = Effect.gen(function*() {
       }
       const active = yield* planSession.isActive
       if (active) {
+        if (msg.text === APPROVE_BUTTON_LABEL) {
+          yield* Effect.log("User approved task creation")
+          yield* planSession.approve.pipe(
+            Effect.tapError((err) => Effect.logError(`Plan approve error: ${err.message}`)),
+            Effect.orElseSucceed(() => undefined)
+          )
+          return
+        }
+        if (msg.text === REJECT_BUTTON_LABEL) {
+          yield* Effect.log("User rejected task creation")
+          yield* planSession.reject.pipe(
+            Effect.tapError((err) => Effect.logError(`Plan reject error: ${err.message}`)),
+            Effect.orElseSucceed(() => undefined)
+          )
+          yield* notifier.sendMessage("Plan rejected.")
+          return
+        }
         const pending = yield* Ref.get(pendingAnswerCount)
         if (pending > 0) {
           yield* Effect.log("Forwarding answer to plan session")
@@ -281,6 +300,11 @@ export const runEventLoop = Effect.gen(function*() {
                 options: q.options?.map((o) => ({ label: o.label }))
               })
             })
+          })),
+        Match.tag("PlanSpecReady", () =>
+          notifier.sendMessage({
+            text: "Spec ready. Review the output above, then approve to create tasks.",
+            replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: REJECT_BUTTON_LABEL }]
           })),
         Match.tag("PlanCompleted", () => notifier.sendMessage("Plan completed.")),
         Match.tag("PlanFailed", (e) => notifier.sendMessage(`Plan failed: ${e.message}`)),
