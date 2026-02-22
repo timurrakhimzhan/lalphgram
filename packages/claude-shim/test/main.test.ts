@@ -738,6 +738,17 @@ describe("getShimControlType", () => {
     expect(result).toBe("shim_abort")
   })
 
+  it("returns shim_interrupt for valid interrupt message", () => {
+    // Arrange
+    const line = JSON.stringify({ type: "shim_interrupt", text: "urgent" })
+
+    // Act
+    const result = getShimControlType(line)
+
+    // Assert
+    expect(result).toBe("shim_interrupt")
+  })
+
   it("returns null for unknown type", () => {
     // Arrange
     const line = JSON.stringify({ type: "follow_up", text: "hello" })
@@ -801,6 +812,28 @@ describe("parseShimControl", () => {
 
     // Assert
     expect(result).toEqual({ type: "shim_abort" })
+  })
+
+  it("returns shim_interrupt with text when present", () => {
+    // Arrange
+    const line = JSON.stringify({ type: "shim_interrupt", text: "urgent message" })
+
+    // Act
+    const result = parseShimControl(line)
+
+    // Assert
+    expect(result).toEqual({ type: "shim_interrupt", text: "urgent message" })
+  })
+
+  it("returns shim_interrupt without text when text field is absent", () => {
+    // Arrange
+    const line = JSON.stringify({ type: "shim_interrupt" })
+
+    // Act
+    const result = parseShimControl(line)
+
+    // Assert
+    expect(result).toEqual({ type: "shim_interrupt" })
   })
 
   it("returns null for follow_up type", () => {
@@ -954,6 +987,50 @@ describe("shimProgram post-handshake control", () => {
         type: "user",
         message: { role: "user", content: "Plan this" },
         session_id: ""
+      })
+    }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
+  })
+
+  it.effect("calls q.interrupt() and offers text on shim_interrupt", () => {
+    // Arrange
+    const stdinStream = new PassThrough()
+    stdinStream.write(SHIM_START_LINE)
+
+    const gen = (async function*() {
+      yield { type: "system", subtype: "init", session_id: "test-session" }
+      yield { type: "result", subtype: "success" }
+      stdinStream.write(JSON.stringify({ type: "shim_interrupt", text: "urgent fix needed" }) + "\n")
+      await delay(50)
+    })()
+
+    const mockQuery = createCustomMockQuery(gen)
+    const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
+    const deps: ShimDepsService = {
+      args: ["Plan this"],
+      createQuery: mockCreateQuery,
+      stdout: { write: vi.fn(() => true) },
+      stderr: { write: vi.fn(() => true) },
+      stdin: stdinStream,
+      env: { REAL_CLAUDE_PATH: "/usr/local/bin/claude" }
+    }
+
+    return Effect.gen(function*() {
+      // Act
+      yield* shimProgram
+
+      // Assert
+      expect(mockQuery.interrupt).toHaveBeenCalledTimes(1)
+      const messages = yield* collectPromptMessages(mockCreateQuery)
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "Plan this" },
+        session_id: ""
+      })
+      expect(messages[1]).toMatchObject({
+        type: "user",
+        message: { role: "user", content: "urgent fix needed" },
+        session_id: "test-session"
       })
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })

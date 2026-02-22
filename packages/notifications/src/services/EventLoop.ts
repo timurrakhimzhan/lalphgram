@@ -5,6 +5,7 @@
 import { Console, Effect, Layer, Match, Option, Ref, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
+import { markdownToTelegramHtml, splitMessage } from "../lib/TelegramFormatter.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AutoMerge, AutoMergeLive } from "./AutoMerge.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
@@ -91,16 +92,22 @@ export const MainLayer = Layer.mergeAll(
  * @since 1.0.0
  * @category event-loop
  */
-const formatTelegramHtml = (text: string) =>
-  text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-
 export const PLAN_BUTTON_LABEL = "Plan"
 const DONE_BUTTON_LABEL = "Done"
+export const FEATURE_BUTTON_LABEL = "Feature"
+export const BUG_BUTTON_LABEL = "Bug"
+export const REFACTOR_BUTTON_LABEL = "Refactor"
+export const OTHER_BUTTON_LABEL = "Other"
+
+const PLAN_TYPE_LABELS = [
+  FEATURE_BUTTON_LABEL,
+  BUG_BUTTON_LABEL,
+  REFACTOR_BUTTON_LABEL,
+  OTHER_BUTTON_LABEL
+]
 export const APPROVE_BUTTON_LABEL = "Approve"
+export const BUFFER_BUTTON_LABEL = "Buffer"
+export const INTERRUPT_BUTTON_LABEL = "Interrupt"
 
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
@@ -114,7 +121,9 @@ export const runEventLoop = Effect.gen(function*() {
 
   const collectingPlan = yield* Ref.make(false)
   const planBuffer = yield* Ref.make<ReadonlyArray<string>>([])
+  const planType = yield* Ref.make<Option.Option<string>>(Option.none())
   const pendingAnswerCount = yield* Ref.make(0)
+  const pendingFollowUp = yield* Ref.make<Option.Option<string>>(Option.none())
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -202,11 +211,22 @@ export const runEventLoop = Effect.gen(function*() {
     Effect.gen(function*() {
       yield* Effect.log(`Incoming message: ${msg.text}`)
       if (msg.text === PLAN_BUTTON_LABEL) {
-        yield* Effect.log("Plan collection started")
+        yield* Effect.log("Plan type selection shown")
+        yield* notifier.sendMessage({
+          text: "What type of change?",
+          options: PLAN_TYPE_LABELS.map((label) => ({ label }))
+        })
+        return
+      }
+      if (PLAN_TYPE_LABELS.includes(msg.text)) {
+        yield* Effect.log("Plan type selected, collection started").pipe(
+          Effect.annotateLogs("planType", msg.text)
+        )
+        yield* Ref.set(planType, Option.some(msg.text))
         yield* Ref.set(collectingPlan, true)
         yield* Ref.set(planBuffer, [])
         yield* notifier.sendMessage({
-          text: "Describe what you'd like to plan. Send your messages, then tap <b>Done</b> when ready.",
+          text: "Describe what you'd like to plan. Tap <b>Done</b> when ready.",
           replyKeyboard: [{ label: DONE_BUTTON_LABEL }]
         })
         return
@@ -237,6 +257,7 @@ export const runEventLoop = Effect.gen(function*() {
           Effect.annotateLogs("bufferedText", msg.text)
         )
         yield* Ref.update(planBuffer, (buf) => [...buf, msg.text])
+        yield* notifier.sendMessage("✓ Added. Tap <b>Done</b> when ready.")
         return
       }
       const active = yield* planSession.isActive
@@ -249,6 +270,30 @@ export const runEventLoop = Effect.gen(function*() {
           )
           return
         }
+        if (msg.text === BUFFER_BUTTON_LABEL) {
+          const stored = yield* Ref.getAndSet(pendingFollowUp, Option.none())
+          if (Option.isSome(stored)) {
+            yield* Effect.log("Buffering follow-up message")
+            yield* planSession.sendFollowUp(stored.value).pipe(
+              Effect.tap(() => notifier.sendMessage("Message buffered — Claude will process it shortly.")),
+              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+          }
+          return
+        }
+        if (msg.text === INTERRUPT_BUTTON_LABEL) {
+          const stored = yield* Ref.getAndSet(pendingFollowUp, Option.none())
+          if (Option.isSome(stored)) {
+            yield* Effect.log("Interrupting Claude with follow-up message")
+            yield* planSession.interrupt(stored.value).pipe(
+              Effect.tap(() => notifier.sendMessage("Claude interrupted — processing your message now.")),
+              Effect.tapError((err) => Effect.logError(`Plan interrupt error: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+          }
+          return
+        }
         const pending = yield* Ref.get(pendingAnswerCount)
         if (pending > 0) {
           yield* Effect.log("Forwarding answer to plan session")
@@ -258,12 +303,12 @@ export const runEventLoop = Effect.gen(function*() {
             Effect.orElseSucceed(() => undefined)
           )
         } else {
-          yield* Effect.log("Sending follow-up to plan session")
-          yield* planSession.sendFollowUp(msg.text).pipe(
-            Effect.tap(() => notifier.sendMessage("Message received — Claude will process it shortly.")),
-            Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
-            Effect.orElseSucceed(() => undefined)
-          )
+          yield* Effect.log("Holding follow-up message, showing buffer/interrupt buttons")
+          yield* Ref.set(pendingFollowUp, Option.some(msg.text))
+          yield* notifier.sendMessage({
+            text: "Send as follow-up or interrupt Claude?",
+            options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }]
+          })
         }
       }
     }).pipe(Effect.annotateLogs("service", "PlanInput"))
@@ -279,13 +324,15 @@ export const runEventLoop = Effect.gen(function*() {
   const planEventStream = planSession.events.pipe(
     Stream.mapEffect((event) =>
       Match.value(event).pipe(
-        Match.tag("PlanTextOutput", (e) => notifier.sendMessage(formatTelegramHtml(e.text).slice(0, 4096))),
+        Match.tag("PlanTextOutput", (e) =>
+          Effect.forEach(splitMessage(markdownToTelegramHtml(e.text)), (chunk) => notifier.sendMessage(chunk))),
         Match.tag("PlanQuestion", (e) =>
           Effect.gen(function*() {
-            yield* Ref.update(pendingAnswerCount, (n) => n + e.questions.length)
+            yield* Ref.update(pendingAnswerCount, (n) =>
+              n + e.questions.length)
             yield* Effect.forEach(e.questions, (q) => {
-              const formatted = formatTelegramHtml(q.question)
-              const header = q.header != null ? `<b>${formatTelegramHtml(q.header)}</b>\n` : ""
+              const formatted = markdownToTelegramHtml(q.question)
+              const header = q.header != null ? `<b>${markdownToTelegramHtml(q.header)}</b>\n` : ""
               return notifier.sendMessage({
                 text: `${header}${formatted}`,
                 options: q.options?.map((o) => ({ label: o.label }))

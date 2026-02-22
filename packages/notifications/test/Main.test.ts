@@ -16,7 +16,17 @@ import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge } from "../src/services/AutoMerge.js"
 import { CommentTimer } from "../src/services/CommentTimer.js"
-import { APPROVE_BUTTON_LABEL, PLAN_BUTTON_LABEL, runEventLoop } from "../src/services/EventLoop.js"
+import {
+  APPROVE_BUTTON_LABEL,
+  BUFFER_BUTTON_LABEL,
+  BUG_BUTTON_LABEL,
+  FEATURE_BUTTON_LABEL,
+  INTERRUPT_BUTTON_LABEL,
+  OTHER_BUTTON_LABEL,
+  PLAN_BUTTON_LABEL,
+  REFACTOR_BUTTON_LABEL,
+  runEventLoop
+} from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
 import {
   IncomingMessage,
@@ -121,6 +131,7 @@ const makePlanSessionMock = () =>
     start: vi.fn(() => Effect.succeed(undefined)),
     answer: vi.fn(() => Effect.succeed(undefined)),
     sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+    interrupt: vi.fn(() => Effect.succeed(undefined)),
     approve: Effect.succeed(undefined),
     reject: Effect.succeed(undefined),
     isActive: Effect.succeed(false),
@@ -408,10 +419,85 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live("shows type selection buttons when Plan is tapped", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Plan", from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "What type of change?",
+          options: [
+            { label: FEATURE_BUTTON_LABEL },
+            { label: BUG_BUTTON_LABEL },
+            { label: REFACTOR_BUTTON_LABEL },
+            { label: OTHER_BUTTON_LABEL }
+          ]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("enters collection mode with Done keyboard when type is selected", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("Done"),
+          replyKeyboard: [{ label: "Done" }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("sends feedback after each buffered message during collection", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
+      new IncomingMessage({ chatId: "1", text: "Add auth", from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        "✓ Added. Tap <b>Done</b> when ready."
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live("collects messages and starts plan on Done", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
       new IncomingMessage({ chatId: "1", text: "Add auth", from: "user" }),
       new IncomingMessage({ chatId: "1", text: "Use JWT", from: "user" }),
       new IncomingMessage({ chatId: "1", text: "Done", from: "user" })
@@ -427,12 +513,6 @@ describe("multi-step plan input", () => {
 
       // Assert
       expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT")
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("Done"),
-          replyKeyboard: [{ label: "Done" }]
-        })
-      )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith("Planning started...")
     }).pipe(Effect.provide(layer))
   })
@@ -441,6 +521,7 @@ describe("multi-step plan input", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
       new IncomingMessage({ chatId: "1", text: "Done", from: "user" })
     ])
     const messengerMock = makeMessengerMock(incomingStream)
@@ -466,6 +547,7 @@ describe("plan spec approval", () => {
       start: vi.fn(() => Effect.succeed(undefined)),
       answer: vi.fn(() => Effect.succeed(undefined)),
       sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
       approve: Effect.succeed(undefined),
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
@@ -496,6 +578,7 @@ describe("plan spec approval", () => {
       start: vi.fn(() => Effect.succeed(undefined)),
       answer: vi.fn(() => Effect.succeed(undefined)),
       sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
       approve: approveFn(),
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(true),
@@ -518,13 +601,14 @@ describe("plan spec approval", () => {
   })
 })
 
-describe("follow-up message acknowledgment", () => {
-  it.live("sends acknowledgment when follow-up is forwarded to active plan session", () => {
+describe("follow-up buffer vs interrupt choice", () => {
+  it.live("shows Buffer/Interrupt buttons when text arrives during active session", () => {
     // Arrange
     const planSessionMock = PlanSession.of({
       start: vi.fn(() => Effect.succeed(undefined)),
       answer: vi.fn(() => Effect.succeed(undefined)),
       sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
       approve: Effect.succeed(undefined),
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(true),
@@ -542,9 +626,77 @@ describe("follow-up message acknowledgment", () => {
       yield* Effect.sleep(Duration.millis(50))
 
       // Assert
+      expect(planSessionMock.sendFollowUp).not.toHaveBeenCalled()
+      expect(planSessionMock.interrupt).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Send as follow-up or interrupt Claude?",
+          options: [{ label: BUFFER_BUTTON_LABEL }, { label: INTERRUPT_BUTTON_LABEL }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("buffers follow-up when Buffer button is tapped", () => {
+    // Arrange
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: BUFFER_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
       expect(planSessionMock.sendFollowUp).toHaveBeenCalledWith("Also add tests")
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        "Message received — Claude will process it shortly."
+        "Message buffered — Claude will process it shortly."
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("interrupts Claude when Interrupt button is tapped", () => {
+    // Arrange
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(true),
+      events: Stream.never
+    })
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" }),
+      new IncomingMessage({ chatId: "1", text: INTERRUPT_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert
+      expect(planSessionMock.interrupt).toHaveBeenCalledWith("Also add tests")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        "Claude interrupted — processing your message now."
       )
     }).pipe(Effect.provide(layer))
   })

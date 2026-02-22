@@ -1,6 +1,6 @@
 # Project Instructions
 
-- **At the start of every task**: pull the latest base branch (indicated as "Main branch" in the system prompt), then create a feature branch off it
+- **At the start of every task**: before switching branches, ALWAYS commit any uncommitted changes to the current branch (use a `WIP: ...` commit message if needed). NEVER stash or discard changes — always preserve progress with a commit. Then checkout main, pull latest (`git pull --rebase origin main`), and create a new feature branch off it
 - **Before pushing or creating a Pull Request**: rebase onto the latest base branch (`git pull --rebase origin <base-branch>`)
 - Always run `pnpm check` and `pnpm lint:fix` after every change
 - **Before committing**: ALWAYS run `pnpm check`, `pnpm lint:fix`, and `pnpm test` — do NOT commit unless all three pass

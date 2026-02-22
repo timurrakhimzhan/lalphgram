@@ -338,6 +338,41 @@ describe("PlanSession", () => {
       }).pipe(Effect.provide(testLayer))
     }))
 
+  it.live("interrupt writes shim_interrupt JSON to stdin", () =>
+    Effect.gen(function*() {
+      // Arrange — use cat so stdin is echoed to stdout
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+        yield* session.start("test plan")
+
+        // Act
+        yield* session.interrupt("urgent fix")
+        yield* Effect.sleep("100 millis")
+
+        // Assert — session should still be active since cat is running
+        const active = yield* session.isActive
+        expect(active).toBe(true)
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("interrupt fails when no session is active", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        const result = yield* session.interrupt("hello").pipe(Effect.flip)
+
+        // Assert
+        expect(result.message).toBe("No active plan session")
+      }).pipe(Effect.provide(testLayer))
+    }))
+
   it.live("isActive returns true during active session and false after exit", () =>
     Effect.gen(function*() {
       // Arrange

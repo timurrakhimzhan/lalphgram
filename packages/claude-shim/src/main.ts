@@ -5,9 +5,10 @@
  */
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import type { Query, query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import { Context, Data, Effect, Stream } from "effect"
+import { Context, Data, Effect, Stream, Queue } from "effect"
 import { createInterface } from "node:readline"
 import { z } from "zod/v4"
+
 
 export class LineReader {
   private readonly buffer: Array<string> = []
@@ -217,7 +218,7 @@ export function getShimControlType(line: string): string | null {
     if (typeof parsed !== "object" || parsed === null) return null
     if (!("type" in parsed)) return null
     const { type } = Object.fromEntries(Object.entries(parsed))
-    if (type === "shim_start" || type === "shim_abort") return type
+    if (type === "shim_start" || type === "shim_abort" || type === "shim_interrupt") return type
     return null
   } catch {
     return null
@@ -226,7 +227,7 @@ export function getShimControlType(line: string): string | null {
 
 export function parseShimControl(
   line: string
-): { readonly type: "shim_start" | "shim_abort"; readonly text?: string } | null {
+): { readonly type: "shim_start" | "shim_abort" | "shim_interrupt"; readonly text?: string } | null {
   if (line.trim().length === 0) return null
   try {
     const parsed: unknown = JSON.parse(line)
@@ -239,6 +240,11 @@ export function parseShimControl(
         : { type: "shim_start" }
     }
     if (entries["type"] === "shim_abort") return { type: "shim_abort" }
+    if (entries["type"] === "shim_interrupt") {
+      return typeof entries["text"] === "string"
+        ? { type: "shim_interrupt", text: entries["text"] }
+        : { type: "shim_interrupt" }
+    }
     return null
   } catch {
     return null
@@ -316,7 +322,7 @@ export const shimProgram = Effect.gen(function*() {
         return true
       }
 
-      // Handle post-handshake control messages (shim_start / shim_abort)
+      // Handle post-handshake control messages (shim_start / shim_abort / shim_interrupt)
       const control = parseShimControl(line)
       if (control !== null) {
         if (control.type === "shim_start") {
@@ -329,6 +335,19 @@ export const shimProgram = Effect.gen(function*() {
             session_id: sessionId
           })
           followUpQueue.close()
+        } else if (control.type === "shim_interrupt") {
+          deps.stderr.write("claude-shim: shim_interrupt intercepted\n")
+          void q.interrupt().catch((err: unknown) =>
+            deps.stderr.write(`claude-shim: interrupt error: ${String(err)}\n`)
+          )
+          if (control.text != null) {
+            followUpQueue.offer({
+              type: "user",
+              message: { role: "user", content: control.text },
+              parent_tool_use_id: null,
+              session_id: sessionId
+            })
+          }
         } else {
           deps.stderr.write("claude-shim: shim_abort intercepted\n")
           followUpQueue.close()
