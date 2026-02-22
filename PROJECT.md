@@ -15,6 +15,30 @@ notifications ──depends on──> claude-shim (workspace)
 notifications ──depends on──> eslint-plugin (dev, lint only)
 ```
 
+## Cross-Package: Plan Session File Flow
+
+The spec/analysis file detection pipeline spans three systems:
+
+```
+lalph PromptGen (system prompt)
+  ↓ tells Claude to write specs to .specs/ and plan.json
+claude-shim (passthrough)
+  ↓ streams tool_use blocks with file_path as NDJSON
+notifications/PlanSession
+  ↓ extracts file_path from Write/Edit/NotebookEdit tool_use blocks
+  ↓ classifies: isSpecFile (.specs/* except analysis.md, or plan.json)
+  ↓             isAnalysisFile (.specs/analysis.md)
+  ↓ emits: PlanSpecCreated / PlanSpecUpdated / PlanAnalysisReady
+notifications/EventLoop
+  → handles events (Telegram messages, analysis follow-ups)
+```
+
+- **lalph** (`repos/lalph/src/PromptGen.ts` → `planPrompt`) — defines the `.specs/` directory and `plan.json` conventions in Claude's system prompt
+- **AnalysisPrompts** (`notifications/src/lib/AnalysisPrompts.ts`) — generates follow-up prompts instructing Claude to write `.specs/analysis.md`, sent as `follow_up` messages through the shim
+- **claude-shim** — pure passthrough; streams all SDK messages as NDJSON without inspecting file paths
+- **PlanSession** (`notifications/src/services/PlanSession.ts`) — pattern-matches `file_path` from tool_use blocks in the NDJSON stream, classifies into spec vs analysis files, emits typed events
+- **EventLoop** (`notifications/src/services/EventLoop.ts`) — reacts to events: sends Telegram notifications, triggers analysis follow-ups on `PlanSpecCreated`/`PlanSpecUpdated`
+
 ## Tech Stack
 
 - **Runtime**: Effect-TS (`Context.Tag` services, `Layer` DI, `Stream` events, `Queue` async I/O)
