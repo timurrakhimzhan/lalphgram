@@ -18,7 +18,12 @@ const ShimInterrupt = Schema.Struct({
   text: Schema.optional(Schema.String)
 })
 
-export const ShimControl = Schema.Union(ShimStart, ShimAbort, ShimInterrupt)
+const ShimApprove = Schema.Struct({
+  type: Schema.Literal("shim_approve"),
+  text: Schema.optional(Schema.String)
+})
+
+export const ShimControl = Schema.Union(ShimStart, ShimAbort, ShimInterrupt, ShimApprove)
 export type ShimControl = typeof ShimControl.Type
 
 export const FollowUp = Schema.Struct({
@@ -27,7 +32,7 @@ export const FollowUp = Schema.Struct({
 })
 export type FollowUp = typeof FollowUp.Type
 
-export const ShimMessage = Schema.Union(ShimStart, ShimAbort, ShimInterrupt, FollowUp)
+export const ShimMessage = Schema.Union(ShimStart, ShimAbort, ShimInterrupt, ShimApprove, FollowUp)
 export type ShimMessage = typeof ShimMessage.Type
 
 export const decodeShimMessage = Schema.decodeUnknownEither(Schema.parseJson(ShimMessage))

@@ -457,7 +457,7 @@ describe("shimProgram", () => {
 describe("shimProgram post-handshake control", () => {
   const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-  it.effect("offers approve text and closes queue on post-handshake shim_start", () => {
+  it.effect("offers approve text and closes queue on shim_approve", () => {
     // Arrange
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
@@ -465,7 +465,7 @@ describe("shimProgram post-handshake control", () => {
     const gen = (async function*() {
       yield { type: "system", subtype: "init", session_id: "test-session" }
       yield { type: "result", subtype: "success" }
-      stdinStream.write(JSON.stringify({ type: "shim_start", text: "Approved! Build it." }) + "\n")
+      stdinStream.write(JSON.stringify({ type: "shim_approve", text: "Approved! Build it." }) + "\n")
       await delay(50)
     })()
 
@@ -500,7 +500,7 @@ describe("shimProgram post-handshake control", () => {
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it.effect("uses default approve text when shim_start has no text field", () => {
+  it.effect("uses default approve text when shim_approve has no text field", () => {
     // Arrange
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
@@ -508,7 +508,7 @@ describe("shimProgram post-handshake control", () => {
     const gen = (async function*() {
       yield { type: "system", subtype: "init", session_id: "test-session" }
       yield { type: "result", subtype: "success" }
-      stdinStream.write(JSON.stringify({ type: "shim_start" }) + "\n")
+      stdinStream.write(JSON.stringify({ type: "shim_approve" }) + "\n")
       await delay(50)
     })()
 
@@ -625,7 +625,7 @@ describe("shimProgram post-handshake control", () => {
     }).pipe(Effect.provide(Layer.succeed(ShimDeps, deps)))
   })
 
-  it.effect("handles follow_up then shim_start in sequence", () => {
+  it.effect("handles follow_up then shim_approve in sequence", () => {
     // Arrange
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
@@ -636,7 +636,7 @@ describe("shimProgram post-handshake control", () => {
       stdinStream.write(JSON.stringify({ type: "follow_up", text: "Also consider edge cases" }) + "\n")
       await delay(50)
       yield { type: "result", subtype: "success" }
-      stdinStream.write(JSON.stringify({ type: "shim_start", text: "Looks good, proceed" }) + "\n")
+      stdinStream.write(JSON.stringify({ type: "shim_approve", text: "Looks good, proceed" }) + "\n")
       await delay(50)
     })()
 

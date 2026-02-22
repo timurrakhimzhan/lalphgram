@@ -405,7 +405,7 @@ export const PlanSessionLive = Layer.scoped(
         })
       }
       const encoder = new TextEncoder()
-      yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_start" }) + "\n"))
+      yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_approve" }) + "\n"))
     })
 
     const reject = Effect.gen(function*() {

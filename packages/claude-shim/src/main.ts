@@ -151,9 +151,9 @@ export const shimProgram = Effect.gen(function*() {
             })
             return
           }
-          case "shim_start": {
+          case "shim_approve": {
             const approveText = msg.text ?? "The user has approved. Proceed with implementation."
-            deps.stderr.write("claude-shim: shim_start intercepted\n")
+            deps.stderr.write("claude-shim: shim_approve intercepted\n")
             yield* Queue.offer(followUpQueue, {
               type: "user",
               message: { role: "user", content: approveText },
@@ -161,6 +161,10 @@ export const shimProgram = Effect.gen(function*() {
               session_id: sessionId
             })
             yield* Queue.offer(followUpQueue, FollowUpStop)
+            return
+          }
+          case "shim_start": {
+            // shim_start after handshake is unexpected — ignore
             return
           }
           case "shim_interrupt": {

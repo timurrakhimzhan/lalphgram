@@ -73,6 +73,34 @@ describe("decodeShimMessage", () => {
     }
   })
 
+  it("decodes shim_approve without text", () => {
+    // Arrange
+    const line = JSON.stringify({ type: "shim_approve" })
+
+    // Act
+    const result = decodeShimMessage(line)
+
+    // Assert
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right).toEqual({ type: "shim_approve" })
+    }
+  })
+
+  it("decodes shim_approve with text", () => {
+    // Arrange
+    const line = JSON.stringify({ type: "shim_approve", text: "Looks good, build it" })
+
+    // Act
+    const result = decodeShimMessage(line)
+
+    // Assert
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      expect(result.right).toEqual({ type: "shim_approve", text: "Looks good, build it" })
+    }
+  })
+
   it("decodes follow_up", () => {
     // Arrange
     const line = JSON.stringify({ type: "follow_up", text: "also do X" })
