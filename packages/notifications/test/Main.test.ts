@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Duration, Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Queue, Stream } from "effect"
 import {
   PRAutoMerged,
   PRCIFailed,
@@ -39,6 +39,9 @@ import { PlanAnalysisReady, PlanQuestion, PlanSession } from "../src/services/Pl
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
+
+/** Yield enough scheduler turns for the daemon fiber to drain all queued stream elements. */
+const flush = Effect.yieldNow().pipe(Effect.repeatN(100))
 
 const testRuntimeConfig = new RuntimeConfig({
   pollIntervalSeconds: 1,
@@ -196,7 +199,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("<b>New task created</b>")
@@ -211,7 +215,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("<b>Task moved to In Progress</b>")
@@ -229,7 +234,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("<b>New PR opened</b>")
@@ -258,7 +264,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       expect(githubClientMock.postComment).toHaveBeenCalledWith(
         expect.objectContaining({ full_name: "owner/repo" }),
@@ -282,7 +289,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       expect(commentTimerMock.handleComment).toHaveBeenCalledWith(pr, comment)
     }).pipe(Effect.provide(layer))
@@ -297,7 +305,8 @@ describe("event loop dispatch", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -325,7 +334,8 @@ describe("event loop dispatch", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
@@ -364,7 +374,8 @@ describe("event loop dispatch", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(trackerMock.moveToTodo).not.toHaveBeenCalled()
@@ -395,7 +406,8 @@ describe("event loop dispatch", () => {
 
     // Act & Assert
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Startup message + both events processed even though the first event failed
       expect(messengerMock.sendMessage).toHaveBeenCalledTimes(3)
@@ -410,7 +422,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -422,7 +435,7 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("shows type selection buttons when Plan is tapped", () => {
+  it.effect("shows type selection buttons when Plan is tapped", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" })
@@ -432,8 +445,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -451,7 +464,7 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("enters collection mode with Done keyboard when type is selected", () => {
+  it.effect("enters collection mode with Done keyboard when type is selected", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
@@ -462,8 +475,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -475,7 +488,7 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("sends feedback after each buffered message during collection", () => {
+  it.effect("sends feedback after each buffered message during collection", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
@@ -487,8 +500,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -497,7 +510,7 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("collects messages and starts plan on Done", () => {
+  it.effect("collects messages and starts plan on Done", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
@@ -512,8 +525,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT")
@@ -526,7 +539,7 @@ describe("multi-step plan input", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("sends error when Done is tapped with empty buffer", () => {
+  it.effect("sends error when Done is tapped with empty buffer", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
@@ -539,8 +552,8 @@ describe("multi-step plan input", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.start).not.toHaveBeenCalled()
@@ -550,7 +563,7 @@ describe("multi-step plan input", () => {
 })
 
 describe("plan spec approval", () => {
-  it.live("sends approval message with buttons on PlanAnalysisReady", () => {
+  it.effect("sends approval message with buttons on PlanAnalysisReady", () => {
     // Arrange
     const planSessionMock = PlanSession.of({
       start: vi.fn(() => Effect.succeed(undefined)),
@@ -568,8 +581,8 @@ describe("plan spec approval", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -581,38 +594,35 @@ describe("plan spec approval", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("calls approve on plan session when Approve button is tapped", () => {
-    // Arrange
-    const approveFn = vi.fn(() => Effect.succeed(undefined))
-    const planSessionMock = PlanSession.of({
-      start: vi.fn(() => Effect.succeed(undefined)),
-      answer: vi.fn(() => Effect.succeed(undefined)),
-      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
-      interrupt: vi.fn(() => Effect.succeed(undefined)),
-      approve: approveFn(),
-      reject: Effect.succeed(undefined),
-      isActive: Effect.succeed(false),
-      isIdle: Effect.succeed(false),
-      events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
-    })
-    // Delay Approve so PlanSpecReady sets state to SpecReady first
-    const incomingStream = Stream.fromEffect(
-      Effect.sleep(Duration.millis(20)).pipe(
-        Effect.as(new IncomingMessage({ chatId: "1", text: APPROVE_BUTTON_LABEL, from: "user" }))
-      )
-    )
-    const messengerMock = makeMessengerMock(incomingStream)
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+  it.effect("calls approve on plan session when Approve button is tapped", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const approveFn = vi.fn(() => Effect.succeed(undefined))
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: approveFn(),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-    // Act
-    return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      // Act — fork so the daemon processes PlanAnalysisReady before Approve arrives
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: APPROVE_BUTTON_LABEL, from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
 
       // Assert
       expect(approveFn).toHaveBeenCalled()
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 })
 
 const planSetupMessages = [
@@ -623,7 +633,7 @@ const planSetupMessages = [
 ]
 
 describe("follow-up buffer vs interrupt choice", () => {
-  it.live("shows Buffer/Interrupt buttons when text arrives during active session", () => {
+  it.effect("shows Buffer/Interrupt buttons when text arrives during active session", () => {
     // Arrange
     const planSessionMock = makePlanSessionMock()
     const incomingStream = Stream.fromIterable([
@@ -635,8 +645,8 @@ describe("follow-up buffer vs interrupt choice", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.sendFollowUp).not.toHaveBeenCalled()
@@ -655,7 +665,7 @@ describe("follow-up buffer vs interrupt choice", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("buffers follow-up when Buffer button is tapped", () => {
+  it.effect("buffers follow-up when Buffer button is tapped", () => {
     // Arrange
     const planSessionMock = makePlanSessionMock()
     const incomingStream = Stream.fromIterable([
@@ -668,8 +678,8 @@ describe("follow-up buffer vs interrupt choice", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.sendFollowUp).toHaveBeenCalledWith("Also add tests")
@@ -679,7 +689,7 @@ describe("follow-up buffer vs interrupt choice", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("discards follow-up when Omit button is tapped", () => {
+  it.effect("discards follow-up when Omit button is tapped", () => {
     // Arrange
     const planSessionMock = makePlanSessionMock()
     const incomingStream = Stream.fromIterable([
@@ -692,8 +702,8 @@ describe("follow-up buffer vs interrupt choice", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.sendFollowUp).not.toHaveBeenCalled()
@@ -702,7 +712,7 @@ describe("follow-up buffer vs interrupt choice", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("interrupts Claude when Interrupt button is tapped", () => {
+  it.effect("interrupts Claude when Interrupt button is tapped", () => {
     // Arrange
     const planSessionMock = makePlanSessionMock()
     const incomingStream = Stream.fromIterable([
@@ -715,8 +725,8 @@ describe("follow-up buffer vs interrupt choice", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.interrupt).toHaveBeenCalledWith("Also add tests")
@@ -726,7 +736,7 @@ describe("follow-up buffer vs interrupt choice", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("sends follow-up directly when Claude is idle (no menu)", () => {
+  it.effect("sends follow-up directly when Claude is idle (no menu)", () => {
     // Arrange
     const planSessionMock = makePlanSessionMock({ isIdle: Effect.succeed(true) })
     const incomingStream = Stream.fromIterable([
@@ -738,8 +748,8 @@ describe("follow-up buffer vs interrupt choice", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert — follow-up sent directly, no menu shown
       expect(planSessionMock.sendFollowUp).toHaveBeenCalledWith("Also add tests")
@@ -754,7 +764,7 @@ describe("follow-up buffer vs interrupt choice", () => {
 })
 
 describe("plan abort", () => {
-  it.live("aborts during collection mode", () => {
+  it.effect("aborts during collection mode", () => {
     // Arrange
     const incomingStream = Stream.fromIterable([
       new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
@@ -768,8 +778,8 @@ describe("plan abort", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(planSessionMock.start).not.toHaveBeenCalled()
@@ -782,7 +792,7 @@ describe("plan abort", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("aborts active plan session", () => {
+  it.effect("aborts active plan session", () => {
     // Arrange
     const rejectFn = vi.fn(() => Effect.succeed(undefined))
     const planSessionMock = PlanSession.of({
@@ -805,8 +815,8 @@ describe("plan abort", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(rejectFn).toHaveBeenCalled()
@@ -819,7 +829,7 @@ describe("plan abort", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("aborts and clears pending follow-up", () => {
+  it.effect("aborts and clears pending follow-up", () => {
     // Arrange
     const rejectFn = vi.fn(() => Effect.succeed(undefined))
     const planSessionMock = PlanSession.of({
@@ -843,8 +853,8 @@ describe("plan abort", () => {
 
     // Act
     return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      yield* Effect.fork(runEventLoop)
+      yield* flush
 
       // Assert
       expect(rejectFn).toHaveBeenCalled()
@@ -888,34 +898,24 @@ describe("my own answer flow", () => {
     })
   }
 
-  it.live("prompts for free-text then forwards typed answer", () => {
-    // Arrange
-    const answerFn = vi.fn(() => Effect.succeed(undefined))
-    const planSessionMock = makeQuestionPlanSession({ answerFn })
-    // Plan setup messages get state to SessionRunning, then delayed "Custom answer" + free-text
-    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(20)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
-          )
-        )
-      ),
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(40)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Use approach C instead", from: "user" }))
-          )
-        )
-      )
-    )
-    const messengerMock = makeMessengerMock(incomingStream)
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+  it.effect("prompts for free-text then forwards typed answer", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planSessionMock = makeQuestionPlanSession({ answerFn })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-    // Act
-    return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(80))
+      // Act — fork so the daemon processes planSetupMessages + PlanQuestion before Custom answer
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Use approach C instead", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
 
       // Assert — prompt shown after tapping "Custom answer"
       expect(messengerMock.sendMessage).toHaveBeenCalledWith({
@@ -924,36 +924,26 @@ describe("my own answer flow", () => {
       })
       // Free-text forwarded as the answer
       expect(answerFn).toHaveBeenCalledWith("Use approach C instead")
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 
-  it.live("abort works while awaiting free-text answer", () => {
-    // Arrange
-    const rejectFn = vi.fn(() => Effect.succeed(undefined))
-    const planSessionMock = makeQuestionPlanSession({ rejectFn })
-    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(20)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
-          )
-        )
-      ),
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(40)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" }))
-          )
-        )
-      )
-    )
-    const messengerMock = makeMessengerMock(incomingStream)
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+  it.effect("abort works while awaiting free-text answer", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const rejectFn = vi.fn(() => Effect.succeed(undefined))
+      const planSessionMock = makeQuestionPlanSession({ rejectFn })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-    // Act
-    return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(80))
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
 
       // Assert — abort still works, answer never forwarded
       expect(rejectFn).toHaveBeenCalled()
@@ -964,43 +954,28 @@ describe("my own answer flow", () => {
           replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
         })
       )
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 
-  it.live("Back button re-shows original question options", () => {
-    // Arrange
-    const answerFn = vi.fn(() => Effect.succeed(undefined))
-    const planSessionMock = makeQuestionPlanSession({ answerFn })
-    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(20)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
-          )
-        )
-      ),
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(40)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Back", from: "user" }))
-          )
-        )
-      ),
-      Stream.concat(
-        Stream.fromEffect(
-          Effect.sleep(Duration.millis(80)).pipe(
-            Effect.as(new IncomingMessage({ chatId: "1", text: "Option A", from: "user" }))
-          )
-        )
-      )
-    )
-    const messengerMock = makeMessengerMock(incomingStream)
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+  it.effect("Back button re-shows original question options", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planSessionMock = makeQuestionPlanSession({ answerFn })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-    // Act
-    return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(200))
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Back", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Option A", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
 
       // Assert — Back showed "Type your answer:" with Back button, then re-sent original question
       expect(messengerMock.sendMessage).toHaveBeenCalledWith({
@@ -1015,19 +990,18 @@ describe("my own answer flow", () => {
       )
       // Answer forwarded after going back and selecting Option A
       expect(answerFn).toHaveBeenCalledWith("Option A")
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 
-  it.live("appends Custom answer button to question options", () => {
-    // Arrange
-    const planSessionMock = makeQuestionPlanSession()
-    const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+  it.effect("appends Custom answer button to question options", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const planSessionMock = makeQuestionPlanSession()
+      const messengerMock = makeMessengerMock()
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-    // Act
-    return Effect.gen(function*() {
-      yield* runEventLoop
-      yield* Effect.sleep(Duration.millis(50))
+      // Act — fork so the daemon processes the PlanQuestion event
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
 
       // Assert — question rendered with "Custom answer" appended
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -1039,6 +1013,5 @@ describe("my own answer flow", () => {
           ]
         })
       )
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 })

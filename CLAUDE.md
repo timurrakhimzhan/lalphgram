@@ -21,7 +21,7 @@
 
 ## Bug Fixes & Planning
 
-- **ALWAYS write a failing test first** — whether planning or implementing, the first step for any bug fix is a test that reproduces the bug. Write it, run it, confirm it fails. Only then proceed to the fix
+- **ALWAYS write a failing test first** — whether planning or implementing, the first step for any bug fix is a test that reproduces the bug. Write it, run it, confirm it fails. Only then proceed to the fix. After the fix, test must succeed.
 - This applies to planning mode too: the plan's first action item must be the failing test, not the code change
 
 ## Testing
