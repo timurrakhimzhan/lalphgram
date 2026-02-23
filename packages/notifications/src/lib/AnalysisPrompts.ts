@@ -12,36 +12,42 @@
 export const getAnalysisPrompt = (planType: string): string => {
   switch (planType) {
     case "Feature":
-      return [
-        "Now analyze the spec you just wrote. Write your analysis to `.specs/analysis.md` covering:",
-        "- System design: what services are added or changed?",
-        "- Interfaces and type definitions",
-        "- Layer composition and interconnections",
-        "- Test strategy: what tests are needed and what do they verify?"
-      ].join("\n")
+      return `\
+Now analyze the spec you just wrote. Create the following files:
+
+1. \`.specs/analysis.md\` — high-level design summary in plain text:
+   - What services are added or changed and why
+   - Layer composition: what depends on what
+   - Key design decisions and trade-offs
+
+2. \`.specs/interfaces.mmd\` — a Mermaid classDiagram showing all new/changed service interfaces with their methods and return types. Use \`<<interface>>\` annotations. Show dependency arrows between services. Use \`~\` for generics (e.g. \`Effect~void, MyError~\`).
+
+3. \`.specs/tests.md\` — detailed test plan. For each test case:
+   - **Name**: descriptive test name in \`it("...")\` style
+   - **Scenario**: what situation is being set up
+   - **Action**: what the test does
+   - **Expected outcome**: what should happen
+   - **Why**: why this case matters (edge case, regression, happy path, etc.)`
     case "Bug":
-      return [
-        "Now analyze the spec you just wrote. Write your analysis to `.specs/analysis.md` covering:",
-        "- Root cause analysis",
-        "- A failing TDD test case that reproduces the bug",
-        "- Resolution strategy",
-        "- Regression prevention measures"
-      ].join("\n")
+      return `\
+Now analyze the spec you just wrote. Write your analysis to \`.specs/analysis.md\` covering:
+- Root cause analysis
+- A failing TDD test case that reproduces the bug
+- Resolution strategy
+- Regression prevention measures`
     case "Refactor":
-      return [
-        "Now analyze the spec you just wrote. Write your analysis to `.specs/analysis.md` covering:",
-        "- Current state vs target state",
-        "- Migration steps in order",
-        "- Risk assessment for each step",
-        "- Test impact: which tests need updating?"
-      ].join("\n")
+      return `\
+Now analyze the spec you just wrote. Write your analysis to \`.specs/analysis.md\` covering:
+- Current state vs target state
+- Migration steps in order
+- Risk assessment for each step
+- Test impact: which tests need updating?`
     default:
-      return [
-        "Now analyze the spec you just wrote. Write your analysis to `.specs/analysis.md` covering:",
-        "- Scope summary",
-        "- Implementation approach",
-        "- Dependencies and prerequisites",
-        "- Test strategy"
-      ].join("\n")
+      return `\
+Now analyze the spec you just wrote. Write your analysis to \`.specs/analysis.md\` covering:
+- Scope summary
+- Implementation approach
+- Dependencies and prerequisites
+- Test strategy`
   }
 }

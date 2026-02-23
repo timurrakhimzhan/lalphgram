@@ -9,6 +9,7 @@
 - Events use tagged union pattern with `Data.TaggedEnum`
 - No side effects in schema or type definitions
 - All exports explicit in barrel files
+- Bug fixes use TDD: when planning a bug fix, first write a test case that reproduces the bug and asserts the correct behavior (it should fail against current code), then fix the code to make it pass
 - Always use `@effect/vitest` — import `{ describe, expect, it, vi }` from `"@effect/vitest"`, use `it.effect` to pass the effect directly. Never use `Effect.runPromise` in tests. For tests that use real timers (`Effect.sleep`, polling), use `it.live` instead of `it.effect`
 
 ```typescript

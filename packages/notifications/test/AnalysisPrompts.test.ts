@@ -4,9 +4,10 @@ import { getAnalysisPrompt } from "../src/lib/AnalysisPrompts.js"
 describe("getAnalysisPrompt", () => {
   it("returns Feature-specific prompt", () => {
     const prompt = getAnalysisPrompt("Feature")
-    expect(prompt).toContain("System design")
     expect(prompt).toContain("services")
     expect(prompt).toContain("analysis.md")
+    expect(prompt).toContain("interfaces.mmd")
+    expect(prompt).toContain("tests.md")
   })
 
   it("returns Bug-specific prompt", () => {
