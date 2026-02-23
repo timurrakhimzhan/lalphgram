@@ -3,9 +3,9 @@
  * @since 1.0.0
  */
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
-import { Context, Data, Effect, Exit, identity, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
-import type { ContentBlock } from "../lib/StreamJsonParser.js"
-import { AskUserQuestionInput, StreamJsonMessage } from "../lib/StreamJsonParser.js"
+import { Context, Data, Effect, Exit, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
+import type { ContentBlock, StreamJsonMessage } from "../lib/StreamJsonParser.js"
+import { AskUserQuestionInput, parseNdjsonMessages } from "../lib/StreamJsonParser.js"
 import { AppContext } from "./AppContext.js"
 
 /**
@@ -167,7 +167,6 @@ const isAnalysisFile = (path: string): boolean =>
   path.endsWith(".specs/analysis.md") || path.endsWith(".specs\\analysis.md")
 
 const decodeAskInput = Schema.decodeUnknown(AskUserQuestionInput)
-const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
 
 /**
  * @since 1.0.0
@@ -385,19 +384,7 @@ export const PlanSessionLive = Layer.scoped(
               Effect.annotateLogs({ chunkLength: String(chunk.length), preview: chunk.slice(0, 200) })
             )
           ),
-          Stream.splitLines,
-          Stream.filter((line) => line.trim().length > 0),
-          Stream.mapEffect((line) =>
-            decodeJsonMessage(line).pipe(
-              Effect.tapError((err) =>
-                Effect.logWarning("Non-JSON stdout line, skipping").pipe(
-                  Effect.annotateLogs({ line: line.slice(0, 300), error: err.message.slice(0, 100) })
-                )
-              ),
-              Effect.option
-            )
-          ),
-          Stream.filterMap(identity),
+          parseNdjsonMessages,
           Stream.mapEffect(routeMessage),
           Stream.runDrain,
           Effect.tap(() => flushPendingText),

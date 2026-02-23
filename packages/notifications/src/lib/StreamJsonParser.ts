@@ -2,7 +2,7 @@
  * NDJSON parser for Claude Code `--output-format stream-json` output
  * @since 1.0.0
  */
-import { Effect, flow, Option, Schema, Stream } from "effect"
+import { Effect, flow, identity, Schema, Stream } from "effect"
 
 /**
  * @since 1.0.0
@@ -84,12 +84,16 @@ const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessag
  */
 export const parseNdjsonMessages = flow(
   Stream.splitLines,
+  Stream.filter((line: string) => line.trim().length > 0),
   Stream.mapEffect((line: string) =>
     decodeJsonMessage(line).pipe(
-      Effect.map(Option.some),
-      // eslint-disable-next-line @template/no-silent-error-catch -- intentional: non-JSON lines are filtered, not errors
-      Effect.catchTag("ParseError", () => Effect.succeed(Option.none<StreamJsonMessage>()))
+      Effect.tapError((err) =>
+        Effect.logWarning("Non-JSON stdout line, skipping").pipe(
+          Effect.annotateLogs({ line: line.slice(0, 300), error: err.message.slice(0, 100) })
+        )
+      ),
+      Effect.option
     )
   ),
-  Stream.filterMap((opt: Option.Option<StreamJsonMessage>) => opt)
+  Stream.filterMap(identity)
 )
