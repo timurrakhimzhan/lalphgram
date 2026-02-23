@@ -918,7 +918,10 @@ describe("my own answer flow", () => {
       yield* Effect.sleep(Duration.millis(80))
 
       // Assert — prompt shown after tapping "Custom answer"
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Type your answer:")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith({
+        text: "Type your answer:",
+        options: [{ label: "Back" }]
+      })
       // Free-text forwarded as the answer
       expect(answerFn).toHaveBeenCalledWith("Use approach C instead")
     }).pipe(Effect.provide(layer))
@@ -961,6 +964,57 @@ describe("my own answer flow", () => {
           replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
         })
       )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("Back button re-shows original question options", () => {
+    // Arrange
+    const answerFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = makeQuestionPlanSession({ answerFn })
+    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(20)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+          )
+        )
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(40)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Back", from: "user" }))
+          )
+        )
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(80)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Option A", from: "user" }))
+          )
+        )
+      )
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(200))
+
+      // Assert — Back showed "Type your answer:" with Back button, then re-sent original question
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith({
+        text: "Type your answer:",
+        options: [{ label: "Back" }]
+      })
+      // Original question re-sent with options (called twice total — initial + after Back)
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.arrayContaining([{ label: "Option A" }, { label: "Option B" }])
+        })
+      )
+      // Answer forwarded after going back and selecting Option A
+      expect(answerFn).toHaveBeenCalledWith("Option A")
     }).pipe(Effect.provide(layer))
   })
 

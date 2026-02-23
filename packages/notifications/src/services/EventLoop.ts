@@ -12,7 +12,7 @@ import { AutoMerge, AutoMergeLive } from "./AutoMerge.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
-import { MessengerAdapter } from "./MessengerAdapter/MessengerAdapter.js"
+import { MessengerAdapter, type OutgoingMessage } from "./MessengerAdapter/MessengerAdapter.js"
 import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
@@ -112,6 +112,7 @@ export const INTERRUPT_BUTTON_LABEL = "Interrupt"
 export const OMIT_BUTTON_LABEL = "Omit"
 export const ABORT_BUTTON_LABEL = "Abort"
 const MY_ANSWER_BUTTON_LABEL = "Custom answer"
+const BACK_BUTTON_LABEL = "Back"
 
 type ChatState =
   | { readonly _tag: "Idle" }
@@ -141,6 +142,7 @@ export const runEventLoop = Effect.gen(function*() {
   const pendingOptionLabels = yield* Ref.make<ReadonlySet<string>>(new Set())
   const analysisFollowUpSent = yield* Ref.make(false)
   const awaitingFreeTextAnswer = yield* Ref.make(false)
+  const lastQuestionMessage = yield* Ref.make<Option.Option<OutgoingMessage>>(Option.none())
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -342,7 +344,18 @@ export const runEventLoop = Effect.gen(function*() {
           if (pending > 0 && options.has(msg.text)) {
             if (msg.text === MY_ANSWER_BUTTON_LABEL) {
               yield* Ref.set(awaitingFreeTextAnswer, true)
-              yield* notifier.sendMessage("Type your answer:")
+              yield* notifier.sendMessage({
+                text: "Type your answer:",
+                options: [{ label: BACK_BUTTON_LABEL }]
+              })
+              return
+            }
+            if (msg.text === BACK_BUTTON_LABEL) {
+              yield* Ref.set(awaitingFreeTextAnswer, false)
+              const lastQ = yield* Ref.get(lastQuestionMessage)
+              if (Option.isSome(lastQ)) {
+                yield* notifier.sendMessage(lastQ.value)
+              }
               return
             }
             yield* Ref.set(awaitingFreeTextAnswer, false)
@@ -465,15 +478,19 @@ export const runEventLoop = Effect.gen(function*() {
             yield* Ref.update(pendingAnswerCount, (n) =>
               n + e.questions.length)
             const labels = e.questions.flatMap((q) => q.options?.map((o) => o.label) ?? [])
-            yield* Ref.update(pendingOptionLabels, (s) => new Set([...s, ...labels, MY_ANSWER_BUTTON_LABEL]))
+            yield* Ref.update(pendingOptionLabels, (s) =>
+              new Set([...s, ...labels, MY_ANSWER_BUTTON_LABEL, BACK_BUTTON_LABEL]))
             yield* Effect.forEach(e.questions, (q) => {
               const formatted = markdownToTelegramHtml(q.question)
               const header = q.header != null ? `<b>${markdownToTelegramHtml(q.header)}</b>\n` : ""
               const baseOptions = q.options?.map((o) => ({ label: o.label })) ?? []
-              return notifier.sendMessage({
+              const msg: OutgoingMessage = {
                 text: `${header}${formatted}`,
                 options: [...baseOptions, { label: MY_ANSWER_BUTTON_LABEL }]
-              })
+              }
+              return Ref.set(lastQuestionMessage, Option.some(msg)).pipe(
+                Effect.andThen(notifier.sendMessage(msg))
+              )
             })
           })),
         Match.tag("PlanSpecCreated", (e) =>
