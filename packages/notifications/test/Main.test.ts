@@ -35,11 +35,13 @@ import {
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
+import type { PlanEvent } from "../src/services/PlanSession.js"
 import {
   PlanAnalysisReady,
   PlanAwaitingInput,
   PlanQuestion,
   PlanSession,
+  PlanSessionError,
   PlanSpecCreated
 } from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
@@ -137,6 +139,8 @@ const makeCommentTimerMock = () =>
     shutdown: Effect.succeed(undefined)
   })
 
+const readFailure = Effect.fail(new PlanSessionError({ message: "no specs dir", cause: null }))
+
 const makePlanSessionMock = (overrides?: { isIdle?: Effect.Effect<boolean> }) =>
   PlanSession.of({
     start: vi.fn(() => Effect.succeed(undefined)),
@@ -147,6 +151,10 @@ const makePlanSessionMock = (overrides?: { isIdle?: Effect.Effect<boolean> }) =>
     reject: Effect.succeed(undefined),
     isActive: Effect.succeed(false),
     isIdle: overrides?.isIdle ?? Effect.succeed(false),
+    readFeatureAnalysis: readFailure,
+    readBugAnalysis: readFailure,
+    readRefactorAnalysis: readFailure,
+    readDefaultAnalysis: readFailure,
     events: Stream.never
   })
 
@@ -568,6 +576,13 @@ describe("multi-step plan input", () => {
   })
 })
 
+const planSetupMessages = [
+  new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
+  new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
+  new IncomingMessage({ chatId: "1", text: "plan text", from: "user" }),
+  new IncomingMessage({ chatId: "1", text: "Done", from: "user" })
+]
+
 describe("plan spec approval", () => {
   it.effect("does not show Approve when spec is missing", () => {
     // Arrange — analysis + idle but no spec
@@ -580,6 +595,10 @@ describe("plan spec approval", () => {
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
       events: Stream.make(
         new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
         new PlanAwaitingInput({})
@@ -614,6 +633,10 @@ describe("plan spec approval", () => {
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
       events: Stream.make(
         new PlanSpecCreated({ filePath: ".specs/feature.md" }),
         new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
@@ -651,6 +674,10 @@ describe("plan spec approval", () => {
         reject: Effect.succeed(undefined),
         isActive: Effect.succeed(false),
         isIdle: Effect.succeed(false),
+        readFeatureAnalysis: readFailure,
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
         events: Stream.make(
           new PlanSpecCreated({ filePath: ".specs/feature.md" }),
           new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
@@ -671,14 +698,150 @@ describe("plan spec approval", () => {
       // Assert
       expect(approveFn).toHaveBeenCalled()
     }))
-})
 
-const planSetupMessages = [
-  new IncomingMessage({ chatId: "1", text: "Plan", from: "user" }),
-  new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }),
-  new IncomingMessage({ chatId: "1", text: "plan text", from: "user" }),
-  new IncomingMessage({ chatId: "1", text: "Done", from: "user" })
-]
+  it.effect("sends analysis files via Telegram when all conditions met", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: Effect.succeed({
+          analysis: "# Analysis\nDesign summary",
+          services: "classDiagram\nclass Foo",
+          test: "# Tests\n- test case 1"
+        }),
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act — process setup messages first, then fire plan events
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offerAll(planEventQueue, [
+        new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      ])
+      yield* flush
+
+      // Assert — file headers sent
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>analysis.md</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>services.mmd</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>test.md</b>")
+      )
+      // Approve keyboard still shown
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Spec ready. Reply with questions or approve to proceed.",
+          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
+        })
+      )
+    }))
+
+  it.effect("wraps services.mmd content in pre tag", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: Effect.succeed({
+          analysis: "summary",
+          services: "classDiagram\nclass Foo",
+          test: "test plan"
+        }),
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offerAll(planEventQueue, [
+        new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      ])
+      yield* flush
+
+      // Assert — services.mmd wrapped in <pre>
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<pre>")
+      )
+    }))
+
+  it.effect("shows Approve even when read fails", () => {
+    // Arrange — all read methods fail
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
+      events: Stream.make(
+        new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      )
+    })
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* Effect.fork(runEventLoop)
+      yield* flush
+
+      // Assert — Approve keyboard still shown, no file headers sent
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Spec ready. Reply with questions or approve to proceed.",
+          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
+        })
+      )
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("<b>analysis.md</b>")
+      )
+    }).pipe(Effect.provide(layer))
+  })
+})
 
 describe("follow-up buffer vs interrupt choice", () => {
   it.effect("shows Buffer/Interrupt buttons when text arrives during active session", () => {
@@ -852,6 +1015,10 @@ describe("plan abort", () => {
       reject: rejectFn(),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
       events: Stream.never
     })
     const incomingStream = Stream.fromIterable([
@@ -889,6 +1056,10 @@ describe("plan abort", () => {
       reject: rejectFn(),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
       events: Stream.never
     })
     const incomingStream = Stream.fromIterable([
@@ -942,6 +1113,10 @@ describe("my own answer flow", () => {
       reject: rejectFn(),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
+      readFeatureAnalysis: readFailure,
+      readBugAnalysis: readFailure,
+      readRefactorAnalysis: readFailure,
+      readDefaultAnalysis: readFailure,
       events: Stream.make(questionEvent)
     })
   }

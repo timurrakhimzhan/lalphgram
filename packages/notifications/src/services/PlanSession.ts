@@ -117,6 +117,14 @@ export interface PlanSessionService {
   readonly reject: Effect.Effect<void, PlanSessionError>
   readonly isActive: Effect.Effect<boolean>
   readonly isIdle: Effect.Effect<boolean>
+  readonly readFeatureAnalysis: Effect.Effect<{
+    readonly analysis: string
+    readonly services: string
+    readonly test: string
+  }, PlanSessionError>
+  readonly readBugAnalysis: Effect.Effect<{ readonly analysis: string }, PlanSessionError>
+  readonly readRefactorAnalysis: Effect.Effect<{ readonly analysis: string }, PlanSessionError>
+  readonly readDefaultAnalysis: Effect.Effect<{ readonly analysis: string }, PlanSessionError>
   readonly events: Stream.Stream<PlanEvent, PlanSessionError>
 }
 
@@ -175,6 +183,7 @@ export const PlanSessionLive = Layer.scoped(
     const buildCommand = yield* PlanCommandBuilder
     const sessionRef = yield* Ref.make<Option.Option<ActiveSession>>(Option.none())
     const idleRef = yield* Ref.make(false)
+    const specsDirRef = yield* Ref.make<Option.Option<string>>(Option.none())
     const eventQueue = yield* Queue.unbounded<PlanEvent>()
     const seenFilePaths = yield* Ref.make<ReadonlySet<string>>(new Set())
 
@@ -200,6 +209,7 @@ export const PlanSessionLive = Layer.scoped(
 
         yield* Ref.set(seenFilePaths, new Set())
         yield* Ref.set(idleRef, false)
+        yield* Ref.set(specsDirRef, Option.none())
 
         const tempDir = pathService.join(appContext.configDir, "tmp")
         yield* fs.makeDirectory(tempDir, { recursive: true }).pipe(
@@ -271,6 +281,9 @@ export const PlanSessionLive = Layer.scoped(
             }).pipe(Effect.option)
             if (Option.isSome(filePathResult)) {
               const fp = filePathResult.value
+              if (fp.includes(".specs/") || fp.includes(".specs\\")) {
+                yield* Ref.set(specsDirRef, Option.some(pathService.dirname(fp)))
+              }
               if (isAnalysisFile(fp)) {
                 yield* Effect.log("Analysis file detected").pipe(
                   Effect.annotateLogs({ filePath: fp })
@@ -522,6 +535,42 @@ export const PlanSessionLive = Layer.scoped(
     const isActive = Ref.get(sessionRef).pipe(Effect.map(Option.isSome))
     const isIdle = Ref.get(idleRef)
 
+    const readSpecFile = (fileName: string) =>
+      Effect.gen(function*() {
+        const specsDir = yield* Ref.get(specsDirRef)
+        if (Option.isNone(specsDir)) {
+          return yield* new PlanSessionError({ message: "No specs directory detected", cause: null })
+        }
+        const filePath = pathService.join(specsDir.value, fileName)
+        return yield* fs.readFileString(filePath).pipe(
+          Effect.mapError((err) =>
+            new PlanSessionError({ message: `Failed to read ${fileName}: ${String(err)}`, cause: err })
+          )
+        )
+      })
+
+    const readFeatureAnalysis = Effect.gen(function*() {
+      const analysis = yield* readSpecFile("analysis.md")
+      const services = yield* readSpecFile("services.mmd")
+      const test = yield* readSpecFile("test.md")
+      return { analysis, services, test }
+    })
+
+    const readBugAnalysis = Effect.gen(function*() {
+      const analysis = yield* readSpecFile("analysis.md")
+      return { analysis }
+    })
+
+    const readRefactorAnalysis = Effect.gen(function*() {
+      const analysis = yield* readSpecFile("analysis.md")
+      return { analysis }
+    })
+
+    const readDefaultAnalysis = Effect.gen(function*() {
+      const analysis = yield* readSpecFile("analysis.md")
+      return { analysis }
+    })
+
     const events: Stream.Stream<PlanEvent, PlanSessionError> = Stream.fromQueue(eventQueue).pipe(
       Stream.mapError((err) => new PlanSessionError({ message: `Event stream error: ${String(err)}`, cause: err }))
     )
@@ -535,6 +584,10 @@ export const PlanSessionLive = Layer.scoped(
       reject: reject.pipe(Effect.annotateLogs({ service: "PlanSession" })),
       isActive,
       isIdle,
+      readFeatureAnalysis,
+      readBugAnalysis,
+      readRefactorAnalysis,
+      readDefaultAnalysis,
       events
     })
   })

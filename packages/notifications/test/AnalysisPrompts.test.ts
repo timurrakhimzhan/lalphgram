@@ -6,8 +6,8 @@ describe("getAnalysisPrompt", () => {
     const prompt = getAnalysisPrompt("Feature")
     expect(prompt).toContain("services")
     expect(prompt).toContain("analysis.md")
-    expect(prompt).toContain("interfaces.mmd")
-    expect(prompt).toContain("tests.md")
+    expect(prompt).toContain("services.mmd")
+    expect(prompt).toContain("test.md")
   })
 
   it("returns Bug-specific prompt", () => {

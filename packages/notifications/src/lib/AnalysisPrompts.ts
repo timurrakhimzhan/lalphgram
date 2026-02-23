@@ -20,14 +20,15 @@ Now analyze the spec you just wrote. Create the following files:
    - Layer composition: what depends on what
    - Key design decisions and trade-offs
 
-2. \`.specs/interfaces.mmd\` — a Mermaid classDiagram showing all new/changed service interfaces with their methods and return types. Use \`<<interface>>\` annotations. Show dependency arrows between services. Use \`~\` for generics (e.g. \`Effect~void, MyError~\`).
+2. \`.specs/services.mmd\` — a Mermaid classDiagram showing all new/changed service interfaces with their methods and return types. Use \`<<interface>>\` annotations. Show dependency arrows between services. Use \`~\` for generics (e.g. \`Effect~void, MyError~\`).
 
-3. \`.specs/tests.md\` — detailed test plan. For each test case:
+3. \`.specs/test.md\` — detailed test plan using AAA (Arrange/Act/Assert) structure. For each test case:
    - **Name**: descriptive test name in \`it("...")\` style
-   - **Scenario**: what situation is being set up
-   - **Action**: what the test does
-   - **Expected outcome**: what should happen
-   - **Why**: why this case matters (edge case, regression, happy path, etc.)`
+   - **Arrange**: what mocks, layers, and initial state to set up
+   - **Act**: the single effect/function call under test
+   - **Assert**: expected outcome and why this case matters
+
+Do NOT display file contents in your response. The system will send them to the user.`
     case "Bug":
       return `\
 Now analyze the spec you just wrote. Write your analysis to \`.specs/analysis.md\` covering:

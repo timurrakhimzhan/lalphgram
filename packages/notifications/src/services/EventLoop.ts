@@ -147,6 +147,41 @@ export const runEventLoop = Effect.gen(function*() {
   class ReadyFlags extends Data.Class<{ spec: boolean; analysis: boolean; idle: boolean }> {}
   const readyFlags = yield* Ref.make(new ReadyFlags({ spec: false, analysis: false, idle: false }))
 
+  const sendSpecFiles = (planType: string) =>
+    Effect.gen(function*() {
+      const readResult = yield* (
+        planType === "Feature"
+          ? planSession.readFeatureAnalysis.pipe(
+            Effect.map((files) => [
+              { name: "analysis.md", content: files.analysis, mermaid: false },
+              { name: "services.mmd", content: files.services, mermaid: true },
+              { name: "test.md", content: files.test, mermaid: false }
+            ])
+          )
+          : planType === "Bug"
+          ? planSession.readBugAnalysis.pipe(
+            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+          )
+          : planType === "Refactor"
+          ? planSession.readRefactorAnalysis.pipe(
+            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+          )
+          : planSession.readDefaultAnalysis.pipe(
+            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+          )
+      ).pipe(Effect.option)
+
+      if (Option.isSome(readResult)) {
+        for (const file of readResult.value) {
+          const formatted = file.mermaid
+            ? markdownToTelegramHtml(`\`\`\`mermaid\n${file.content}\n\`\`\``)
+            : markdownToTelegramHtml(file.content)
+          const text = `<b>${file.name}</b>\n${formatted}`
+          yield* Effect.forEach(splitMessage(text), (chunk) => notifier.sendMessage(chunk))
+        }
+      }
+    })
+
   const showApproveIfReady = Effect.gen(function*() {
     const flags = yield* Ref.get(readyFlags)
     if (!flags.spec || !flags.analysis || !flags.idle) return
@@ -156,6 +191,7 @@ export const runEventLoop = Effect.gen(function*() {
       ? current.planType
       : "Other"
     yield* Ref.set(state, { _tag: "SpecReady", planType })
+    yield* sendSpecFiles(planType)
     yield* notifier.sendMessage({
       text: "Spec ready. Reply with questions or approve to proceed.",
       replyKeyboard: SPEC_READY_KEYBOARD
@@ -385,6 +421,7 @@ export const runEventLoop = Effect.gen(function*() {
               Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
             )
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             const newPending = yield* Ref.get(pendingAnswerCount)
             if (newPending <= 0) {
               yield* Ref.set(pendingOptionLabels, new Set())
@@ -399,6 +436,7 @@ export const runEventLoop = Effect.gen(function*() {
               Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
             )
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             const newPending = yield* Ref.get(pendingAnswerCount)
             if (newPending <= 0) {
               yield* Ref.set(pendingOptionLabels, new Set())
@@ -407,6 +445,7 @@ export const runEventLoop = Effect.gen(function*() {
           }
           const idle = yield* planSession.isIdle
           if (idle) {
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             yield* planSession.sendFollowUp(msg.text).pipe(
               Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
               Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
@@ -421,6 +460,7 @@ export const runEventLoop = Effect.gen(function*() {
           if (msg.text === BUFFER_BUTTON_LABEL) {
             yield* Effect.log("Buffering follow-up message")
             yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             yield* planSession.sendFollowUp(current.message).pipe(
               Effect.tap(() => notifier.sendMessage("Message buffered — Claude will process it shortly.")),
               Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
@@ -431,6 +471,7 @@ export const runEventLoop = Effect.gen(function*() {
           if (msg.text === INTERRUPT_BUTTON_LABEL) {
             yield* Effect.log("Interrupting Claude with follow-up message")
             yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             yield* planSession.interrupt(current.message).pipe(
               Effect.tap(() => notifier.sendMessage("Claude interrupted — processing your message now.")),
               Effect.tapError((err) => Effect.logError(`Plan interrupt error: ${err.message}`)),
@@ -454,6 +495,7 @@ export const runEventLoop = Effect.gen(function*() {
           if (msg.text === APPROVE_BUTTON_LABEL) {
             yield* Effect.log("User approved task creation")
             yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             yield* planSession.approve.pipe(
               Effect.tapError((err) => Effect.logError(`Plan approve error: ${err.message}`)),
               Effect.orElseSucceed(() => undefined)
@@ -467,6 +509,7 @@ export const runEventLoop = Effect.gen(function*() {
           const idleSpec = yield* planSession.isIdle
           if (idleSpec) {
             yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
             yield* planSession.sendFollowUp(msg.text).pipe(
               Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
               Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),

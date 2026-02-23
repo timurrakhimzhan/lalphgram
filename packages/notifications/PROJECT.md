@@ -285,6 +285,10 @@ Manages interactive Claude plan sessions via subprocess.
 | `reject` | `Effect<void>` | Send `{ type: "shim_abort" }` and close session |
 | `isActive` | `Effect<boolean>` | Check if session is running |
 | `isIdle` | `Effect<boolean>` | True after `result` message, false when Claude is working |
+| `readFeatureAnalysis` | `Effect<{ analysis, services, test }>` | Read `.specs/analysis.md`, `services.mmd`, `test.md` |
+| `readBugAnalysis` | `Effect<{ analysis }>` | Read `.specs/analysis.md` |
+| `readRefactorAnalysis` | `Effect<{ analysis }>` | Read `.specs/analysis.md` |
+| `readDefaultAnalysis` | `Effect<{ analysis }>` | Read `.specs/analysis.md` |
 | `events` | `Stream<PlanEvent>` | Stream of plan events |
 
 **Plan Events**:
