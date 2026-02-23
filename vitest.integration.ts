@@ -1,5 +1,5 @@
 import * as path from "node:path"
-import type { UserConfig } from "vitest/config"
+import { defineConfig } from "vitest/config"
 
 const alias = (name: string) => {
   const target = process.env.TEST_DIST !== undefined ? "dist/dist/esm" : "src"
@@ -9,8 +9,7 @@ const alias = (name: string) => {
   })
 }
 
-// This is a workaround, see https://github.com/vitest-dev/vitest/issues/4744
-const config: UserConfig = {
+export default defineConfig({
   esbuild: {
     target: "es2020"
   },
@@ -19,18 +18,14 @@ const config: UserConfig = {
   },
   test: {
     setupFiles: [path.join(__dirname, "setupTests.ts")],
-    fakeTimers: {
-      toFake: undefined
-    },
-    sequence: {
-      concurrent: true
-    },
-    include: ["test/**/*.test.ts"],
+    include: ["packages/*/test/integration/**/*.integration.test.ts"],
     exclude: ["**/.claude/worktrees/**"],
+    testTimeout: 30_000,
+    sequence: {
+      concurrent: false
+    },
     alias: {
       ...alias("notifications")
     }
   }
-}
-
-export default config
+})

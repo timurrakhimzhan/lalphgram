@@ -172,6 +172,7 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
     mergePull: vi.fn(() =>
       Effect.succeed({ sha: "abc123", merged: true, message: "Pull Request successfully merged" })
     ),
+    createGist: vi.fn(() => Effect.succeed({ id: "1", htmlUrl: "https://gist.github.com/1", files: {} })),
     ...overrides
   })
 

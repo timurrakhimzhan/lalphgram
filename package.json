@@ -15,6 +15,7 @@
     "dev:notifications": "pnpm --filter @template/notifications dev",
     "start:notifications": "pnpm --filter @template/notifications start",
     "test": "vitest",
+    "test:integration": "vitest --config vitest.integration.ts",
     "coverage": "vitest --coverage",
     "prepare": "husky"
   },

@@ -6,6 +6,7 @@ import { Console, Data, Effect, Layer, Match, Option, Ref, Stream } from "effect
 import type { AppEvent } from "../Events.js"
 import { getAnalysisPrompt } from "../lib/AnalysisPrompts.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
+import { generateSpecHtml } from "../lib/SpecHtmlGenerator.js"
 import { markdownToTelegramHtml, splitMessage } from "../lib/TelegramFormatter.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AutoMerge, AutoMergeLive } from "./AutoMerge.js"
@@ -14,7 +15,7 @@ import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
 import { MessengerAdapter, type OutgoingMessage } from "./MessengerAdapter/MessengerAdapter.js"
 import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
-import { OctokitClientLive } from "./OctokitClient.js"
+import { OctokitClient, OctokitClientLive } from "./OctokitClient.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
 import { PullRequestTracker, PullRequestTrackerLive } from "./PullRequestTracker.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
@@ -85,7 +86,8 @@ export const MainLayer = Layer.mergeAll(
   autoMergeLayer,
   commentTimerLayer,
   branchParserLayer,
-  planSessionLayer
+  planSessionLayer,
+  octokitLayer
 )
 
 /**
@@ -136,6 +138,7 @@ export const runEventLoop = Effect.gen(function*() {
   const taskTracker = yield* TaskTracker
   const branchParser = yield* BranchParser
   const planSession = yield* PlanSession
+  const octokitClient = yield* OctokitClient
 
   const state = yield* Ref.make<ChatState>({ _tag: "Idle" })
   const pendingAnswerCount = yield* Ref.make(0)
@@ -147,37 +150,57 @@ export const runEventLoop = Effect.gen(function*() {
   class ReadyFlags extends Data.Class<{ spec: boolean; analysis: boolean; idle: boolean }> {}
   const readyFlags = yield* Ref.make(new ReadyFlags({ spec: false, analysis: false, idle: false }))
 
+  const readSpecFiles = (planType: string) =>
+    (
+      planType === "Feature"
+        ? planSession.readFeatureAnalysis.pipe(
+          Effect.map((files) => [
+            { name: "analysis.md", content: files.analysis, mermaid: false },
+            { name: "services.mmd", content: files.services, mermaid: true },
+            { name: "test.md", content: files.test, mermaid: false }
+          ])
+        )
+        : planType === "Bug"
+        ? planSession.readBugAnalysis.pipe(
+          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+        )
+        : planType === "Refactor"
+        ? planSession.readRefactorAnalysis.pipe(
+          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+        )
+        : planSession.readDefaultAnalysis.pipe(
+          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
+        )
+    ).pipe(Effect.option)
+
+  const sendSpecFilesRaw = (files: ReadonlyArray<{ name: string; content: string; mermaid: boolean }>) =>
+    Effect.forEach(files, (file) => {
+      const formatted = file.mermaid
+        ? markdownToTelegramHtml(`\`\`\`mermaid\n${file.content}\n\`\`\``)
+        : markdownToTelegramHtml(file.content)
+      const text = `<b>${file.name}</b>\n${formatted}`
+      return Effect.forEach(splitMessage(text), (chunk) => notifier.sendMessage(chunk))
+    })
+
   const sendSpecFiles = (planType: string) =>
     Effect.gen(function*() {
-      const readResult = yield* (
-        planType === "Feature"
-          ? planSession.readFeatureAnalysis.pipe(
-            Effect.map((files) => [
-              { name: "analysis.md", content: files.analysis, mermaid: false },
-              { name: "services.mmd", content: files.services, mermaid: true },
-              { name: "test.md", content: files.test, mermaid: false }
-            ])
-          )
-          : planType === "Bug"
-          ? planSession.readBugAnalysis.pipe(
-            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-          )
-          : planType === "Refactor"
-          ? planSession.readRefactorAnalysis.pipe(
-            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-          )
-          : planSession.readDefaultAnalysis.pipe(
-            Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-          )
-      ).pipe(Effect.option)
+      const readResult = yield* readSpecFiles(planType)
 
       if (Option.isSome(readResult)) {
-        for (const file of readResult.value) {
-          const formatted = file.mermaid
-            ? markdownToTelegramHtml(`\`\`\`mermaid\n${file.content}\n\`\`\``)
-            : markdownToTelegramHtml(file.content)
-          const text = `<b>${file.name}</b>\n${formatted}`
-          yield* Effect.forEach(splitMessage(text), (chunk) => notifier.sendMessage(chunk))
+        const files = readResult.value
+        const html = generateSpecHtml(files)
+        const gistResult = yield* octokitClient.createGist({
+          description: `Spec: ${planType}`,
+          files: { "spec.html": { content: html } },
+          isPublic: false
+        }).pipe(Effect.option)
+
+        if (Option.isSome(gistResult)) {
+          const rawUrl = gistResult.value.files["spec.html"]?.rawUrl ?? gistResult.value.htmlUrl
+          const viewUrl = `https://htmlpreview.github.io/?${rawUrl}`
+          yield* notifier.sendMessage(`<a href="${viewUrl}">View spec</a>`)
+        } else {
+          yield* sendSpecFilesRaw(files)
         }
       }
     })

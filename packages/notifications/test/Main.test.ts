@@ -35,6 +35,8 @@ import {
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
+import { OctokitClient, OctokitClientError } from "../src/services/OctokitClient.js"
+import type { OctokitClientService } from "../src/services/OctokitClient.js"
 import type { PlanEvent } from "../src/services/PlanSession.js"
 import {
   PlanAnalysisReady,
@@ -139,6 +141,43 @@ const makeCommentTimerMock = () =>
     shutdown: Effect.succeed(undefined)
   })
 
+const makeOctokitClientMock = (overrides?: Partial<OctokitClientService>) =>
+  OctokitClient.of({
+    getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test-user" })),
+    listUserRepos: vi.fn(() => Effect.succeed([])),
+    listPulls: vi.fn(() => Effect.succeed([])),
+    getPull: vi.fn(() =>
+      Effect.succeed({
+        id: 1,
+        number: 1,
+        title: "",
+        state: "open",
+        htmlUrl: "",
+        head: { ref: "", sha: "" },
+        mergeable: null
+      })
+    ),
+    createIssueComment: vi.fn(() => Effect.void),
+    listIssueComments: vi.fn(() => Effect.succeed([])),
+    listUserIssues: vi.fn(() => Effect.succeed([])),
+    getIssue: vi.fn(() =>
+      Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "" })
+    ),
+    addIssueLabels: vi.fn(() => Effect.void),
+    listPullReviewComments: vi.fn(() => Effect.succeed([])),
+    getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
+    listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+    mergePull: vi.fn(() => Effect.succeed({ sha: "", merged: true, message: "" })),
+    createGist: vi.fn(() =>
+      Effect.succeed({
+        id: "gist-123",
+        htmlUrl: "https://gist.github.com/gist-123",
+        files: { "spec.html": { rawUrl: "https://gist.githubusercontent.com/raw/spec.html" } }
+      })
+    ),
+    ...overrides
+  })
+
 const readFailure = Effect.fail(new PlanSessionError({ message: "no specs dir", cause: null }))
 
 const makePlanSessionMock = (overrides?: { isIdle?: Effect.Effect<boolean> }) =>
@@ -166,6 +205,7 @@ const makeTestLayer = (
     trackerMock?: TaskTrackerService
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
+    octokitClientMock?: ReturnType<typeof makeOctokitClientMock>
     taskEvents?: ReadonlyArray<TaskTrackerEvent>
     autoMergeEvents?: ReadonlyArray<AutoMergeEvent>
   } = {}
@@ -184,6 +224,7 @@ const makeTestLayer = (
   }
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
+  const octokitClientMock = overrides.octokitClientMock ?? makeOctokitClientMock()
 
   return {
     layer: Layer.mergeAll(
@@ -195,13 +236,15 @@ const makeTestLayer = (
       Layer.succeed(CommentTimer, commentTimerMock),
       Layer.succeed(PlanSession, planSessionMock),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
+      Layer.succeed(OctokitClient, octokitClientMock),
       BranchParserLive
     ),
     messengerMock,
     githubClientMock,
     trackerMock,
     commentTimerMock,
-    planSessionMock
+    planSessionMock,
+    octokitClientMock
   }
 }
 
@@ -699,10 +742,11 @@ describe("plan spec approval", () => {
       expect(approveFn).toHaveBeenCalled()
     }))
 
-  it.effect("sends analysis files via Telegram when all conditions met", () =>
+  it.effect("uploads gist and sends URL when all conditions met", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const octokitClientMock = makeOctokitClientMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -725,7 +769,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
 
       // Act — process setup messages first, then fire plan events
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -737,15 +781,22 @@ describe("plan spec approval", () => {
       ])
       yield* flush
 
-      // Assert — file headers sent
+      // Assert — gist created and URL sent
+      expect(octokitClientMock.createGist).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Spec: Feature",
+          isPublic: false,
+          files: expect.objectContaining({
+            "spec.html": expect.objectContaining({ content: expect.stringContaining("<!DOCTYPE html>") })
+          })
+        })
+      )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("htmlpreview.github.io")
+      )
+      // No raw file headers sent
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
         expect.stringContaining("<b>analysis.md</b>")
-      )
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        expect.stringContaining("<b>services.mmd</b>")
-      )
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        expect.stringContaining("<b>test.md</b>")
       )
       // Approve keyboard still shown
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -756,10 +807,11 @@ describe("plan spec approval", () => {
       )
     }))
 
-  it.effect("wraps services.mmd content in pre tag", () =>
+  it.effect("includes mermaid content in gist HTML", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const octokitClientMock = makeOctokitClientMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -782,7 +834,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -794,9 +846,71 @@ describe("plan spec approval", () => {
       ])
       yield* flush
 
-      // Assert — services.mmd wrapped in <pre>
+      // Assert — gist HTML contains mermaid pre tag
+      expect(octokitClientMock.createGist).toHaveBeenCalledWith(
+        expect.objectContaining({
+          files: expect.objectContaining({
+            "spec.html": expect.objectContaining({
+              content: expect.stringContaining("<pre class=\"mermaid\">")
+            })
+          })
+        })
+      )
+    }))
+
+  it.effect("falls back to raw text when gist upload fails", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const octokitClientMock = makeOctokitClientMock({
+        createGist: vi.fn(() => Effect.fail(new OctokitClientError({ message: "API error", cause: null })))
+      })
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: Effect.succeed({
+          analysis: "# Analysis\nDesign summary",
+          services: "classDiagram\nclass Foo",
+          test: "# Tests\n- test case 1"
+        }),
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offerAll(planEventQueue, [
+        new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      ])
+      yield* flush
+
+      // Assert — falls back to raw text (file headers sent, no gist URL)
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        expect.stringContaining("<pre>")
+        expect.stringContaining("<b>analysis.md</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>services.mmd</b>")
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.stringContaining("<b>test.md</b>")
+      )
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("htmlpreview.github.io")
       )
     }))
 

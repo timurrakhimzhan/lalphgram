@@ -131,6 +131,16 @@ export interface OctokitMergeResult {
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface OctokitGist {
+  readonly id: string
+  readonly htmlUrl: string
+  readonly files: Record<string, { readonly rawUrl: string }>
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface OctokitClientService {
@@ -199,6 +209,11 @@ export interface OctokitClientService {
     readonly repo: string
     readonly pullNumber: number
   }) => Effect.Effect<OctokitMergeResult, OctokitClientError>
+  readonly createGist: (params: {
+    readonly description: string
+    readonly files: Record<string, { readonly content: string }>
+    readonly isPublic: boolean
+  }) => Effect.Effect<OctokitGist, OctokitClientError>
 }
 
 /**
@@ -564,6 +579,35 @@ export const OctokitClientLive = Layer.effect(
         )
       })
 
+    const createGist = (params: {
+      readonly description: string
+      readonly files: Record<string, { readonly content: string }>
+      readonly isPublic: boolean
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.gists.create({
+              description: params.description,
+              public: params.isPublic,
+              files: params.files
+            }),
+          catch: (err) => new OctokitClientError({ message: `Failed to create gist: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.map((response): OctokitGist => ({
+            id: response.data.id ?? "",
+            htmlUrl: response.data.html_url ?? "",
+            files: Object.fromEntries(
+              Object.entries(response.data.files ?? {}).map(([name, file]) => [
+                name,
+                { rawUrl: file?.raw_url ?? "" }
+              ])
+            )
+          }))
+        )
+      })
+
     return OctokitClient.of({
       getAuthenticatedUser,
       listUserRepos,
@@ -577,7 +621,8 @@ export const OctokitClientLive = Layer.effect(
       listPullReviewComments,
       getCombinedStatusForRef,
       listCheckRunsForRef,
-      mergePull
+      mergePull,
+      createGist
     })
   })
 )
