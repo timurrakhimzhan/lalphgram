@@ -35,7 +35,13 @@ import {
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
-import { PlanAnalysisReady, PlanQuestion, PlanSession } from "../src/services/PlanSession.js"
+import {
+  PlanAnalysisReady,
+  PlanAwaitingInput,
+  PlanQuestion,
+  PlanSession,
+  PlanSpecCreated
+} from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
@@ -563,8 +569,8 @@ describe("multi-step plan input", () => {
 })
 
 describe("plan spec approval", () => {
-  it.effect("sends approval message with buttons on PlanAnalysisReady", () => {
-    // Arrange
+  it.effect("does not show Approve when spec is missing", () => {
+    // Arrange — analysis + idle but no spec
     const planSessionMock = PlanSession.of({
       start: vi.fn(() => Effect.succeed(undefined)),
       answer: vi.fn(() => Effect.succeed(undefined)),
@@ -574,7 +580,45 @@ describe("plan spec approval", () => {
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
       isIdle: Effect.succeed(false),
-      events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
+      events: Stream.make(
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      )
+    })
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* Effect.fork(runEventLoop)
+      yield* flush
+
+      // Assert — Approve keyboard never shown
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Spec ready. Reply with questions or approve to proceed.",
+          replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("shows Approve when spec + analysis + idle are all met", () => {
+    // Arrange — all three conditions
+    const planSessionMock = PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: vi.fn(() => Effect.succeed(undefined)),
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: Effect.succeed(undefined),
+      isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
+      events: Stream.make(
+        new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+        new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+        new PlanAwaitingInput({})
+      )
     })
     const messengerMock = makeMessengerMock()
     const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
@@ -607,13 +651,17 @@ describe("plan spec approval", () => {
         reject: Effect.succeed(undefined),
         isActive: Effect.succeed(false),
         isIdle: Effect.succeed(false),
-        events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
+        events: Stream.make(
+          new PlanSpecCreated({ filePath: ".specs/feature.md" }),
+          new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
+          new PlanAwaitingInput({})
+        )
       })
       const queue = yield* Queue.unbounded<IncomingMessage>()
       const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
       const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-      // Act — fork so the daemon processes PlanAnalysisReady before Approve arrives
+      // Act — fork so the daemon processes all events before Approve arrives
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: APPROVE_BUTTON_LABEL, from: "user" }))

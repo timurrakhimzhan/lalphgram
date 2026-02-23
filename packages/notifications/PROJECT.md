@@ -290,7 +290,10 @@ Manages interactive Claude plan sessions via subprocess.
 **Plan Events**:
 - `PlanTextOutput` — Claude's text response (split for Telegram)
 - `PlanQuestion` — Claude asking a question (via ask_user MCP tool)
-- `PlanSpecReady` — Spec complete, awaiting approval
+- `PlanSpecCreated` — New spec file written under `.specs/`
+- `PlanSpecUpdated` — Existing spec file re-written
+- `PlanAnalysisReady` — `.specs/analysis.md` written
+- `PlanAwaitingInput` — Claude finished its turn (result message received), awaiting user input
 - `PlanCompleted` — Process exited successfully
 - `PlanFailed` — Process failed or stream error
 

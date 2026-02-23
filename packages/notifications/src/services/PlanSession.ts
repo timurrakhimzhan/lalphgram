@@ -82,6 +82,12 @@ export class PlanAnalysisReady extends Data.TaggedClass("PlanAnalysisReady")<{
  * @since 1.0.0
  * @category events
  */
+export class PlanAwaitingInput extends Data.TaggedClass("PlanAwaitingInput")<Record<string, never>> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
 export type PlanEvent =
   | PlanTextOutput
   | PlanQuestion
@@ -90,6 +96,7 @@ export type PlanEvent =
   | PlanSpecCreated
   | PlanSpecUpdated
   | PlanAnalysisReady
+  | PlanAwaitingInput
 
 interface ActiveSession {
   readonly process: CommandExecutor.Process
@@ -347,6 +354,7 @@ export const PlanSessionLive = Layer.scoped(
             if (msg.type === "result") {
               yield* flushPendingText
               yield* Ref.set(idleRef, true)
+              yield* Queue.offer(eventQueue, new PlanAwaitingInput({}))
               yield* Effect.log("Planner result received")
               return
             }

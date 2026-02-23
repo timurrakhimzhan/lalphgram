@@ -2,7 +2,7 @@
  * Event loop and layer construction for the notification service
  * @since 1.0.0
  */
-import { Console, Effect, Layer, Match, Option, Ref, Stream } from "effect"
+import { Console, Data, Effect, Layer, Match, Option, Ref, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
 import { getAnalysisPrompt } from "../lib/AnalysisPrompts.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
@@ -144,6 +144,24 @@ export const runEventLoop = Effect.gen(function*() {
   const awaitingFreeTextAnswer = yield* Ref.make(false)
   const lastQuestionMessage = yield* Ref.make<Option.Option<OutgoingMessage>>(Option.none())
 
+  class ReadyFlags extends Data.Class<{ spec: boolean; analysis: boolean; idle: boolean }> {}
+  const readyFlags = yield* Ref.make(new ReadyFlags({ spec: false, analysis: false, idle: false }))
+
+  const showApproveIfReady = Effect.gen(function*() {
+    const flags = yield* Ref.get(readyFlags)
+    if (!flags.spec || !flags.analysis || !flags.idle) return
+    const current = yield* Ref.get(state)
+    const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
+        current._tag === "SpecReady"
+      ? current.planType
+      : "Other"
+    yield* Ref.set(state, { _tag: "SpecReady", planType })
+    yield* notifier.sendMessage({
+      text: "Spec ready. Reply with questions or approve to proceed.",
+      replyKeyboard: SPEC_READY_KEYBOARD
+    })
+  })
+
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
       Match.tag("TaskCreated", (e) =>
@@ -240,6 +258,7 @@ export const runEventLoop = Effect.gen(function*() {
       yield* Ref.set(pendingAnswerCount, 0)
       yield* Ref.set(pendingOptionLabels, new Set())
       yield* Ref.set(analysisFollowUpSent, false)
+      yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
       yield* Ref.set(awaitingFreeTextAnswer, false)
       yield* Effect.log("Plan aborted")
       yield* notifier.sendMessage({ text: "Plan aborted.", replyKeyboard: IDLE_KEYBOARD })
@@ -309,6 +328,7 @@ export const runEventLoop = Effect.gen(function*() {
             }
             yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
             yield* Ref.set(analysisFollowUpSent, false)
+            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
             yield* Effect.log("Plan collection done, starting session").pipe(
               Effect.annotateLogs("planText", joinedText)
             )
@@ -508,6 +528,8 @@ export const runEventLoop = Effect.gen(function*() {
                 Effect.orElseSucceed(() => undefined)
               )
             }
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, spec: true }))
+            yield* showApproveIfReady
           })),
         Match.tag("PlanSpecUpdated", (e) =>
           Effect.gen(function*() {
@@ -524,30 +546,31 @@ export const runEventLoop = Effect.gen(function*() {
                 Effect.orElseSucceed(() => undefined)
               )
             }
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, spec: true }))
+            yield* showApproveIfReady
           })),
         Match.tag("PlanAnalysisReady", () =>
           Effect.gen(function*() {
-            const current = yield* Ref.get(state)
-            const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
-                current._tag === "SpecReady"
-              ? current.planType
-              : "Other"
-            yield* Ref.set(state, { _tag: "SpecReady", planType })
-            yield* notifier.sendMessage({
-              text: "Spec ready. Reply with questions or approve to proceed.",
-              replyKeyboard: SPEC_READY_KEYBOARD
-            })
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, analysis: true }))
+            yield* showApproveIfReady
+          })),
+        Match.tag("PlanAwaitingInput", () =>
+          Effect.gen(function*() {
+            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: true }))
+            yield* showApproveIfReady
           })),
         Match.tag("PlanCompleted", () =>
           Effect.gen(function*() {
             yield* Ref.set(state, { _tag: "Idle" })
             yield* Ref.set(analysisFollowUpSent, false)
+            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
             yield* notifier.sendMessage({ text: "Plan completed.", replyKeyboard: IDLE_KEYBOARD })
           })),
         Match.tag("PlanFailed", (e) =>
           Effect.gen(function*() {
             yield* Ref.set(state, { _tag: "Idle" })
             yield* Ref.set(analysisFollowUpSent, false)
+            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
             yield* notifier.sendMessage({ text: `Plan failed: ${e.message}`, replyKeyboard: IDLE_KEYBOARD })
           })),
         Match.exhaustive
