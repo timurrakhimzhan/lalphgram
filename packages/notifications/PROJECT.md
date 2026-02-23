@@ -126,6 +126,9 @@ Low-level Octokit SDK wrapper. Dynamically refreshes if GitHub token changes.
 | `listUserIssues(...)` | List issues assigned to user |
 | `getIssue(...)` | Get single issue |
 | `addIssueLabels(...)` | Add labels to issue |
+| `createGist(...)` | Create a GitHub Gist (description, files, isPublic) → `OctokitGist` |
+
+**Models**: `OctokitUser`, `OctokitRepo`, `OctokitPullRequest`, `OctokitPullRequestDetail`, `OctokitComment`, `OctokitIssue`, `OctokitIssueDetail`, `OctokitCheckRun`, `OctokitCombinedStatus`, `OctokitMergeResult`, `OctokitGist` (`{ id, htmlUrl, files: Record<string, { rawUrl }> }`)
 
 **Error**: `OctokitClientError`
 **Layer**: `OctokitClientLive` — requires `LalphConfig`
@@ -360,6 +363,9 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 
 ## Utilities
 
+### SpecHtmlGenerator (`lib/SpecHtmlGenerator.ts`)
+- `generateSpecHtml(files)` — Pure function that takes `ReadonlyArray<{ name, content, mermaid }>` and returns a self-contained HTML string with Mermaid.js CDN for client-side diagram rendering, basic markdown-to-HTML conversion, and HTML escaping
+
 ### TelegramFormatter (`lib/TelegramFormatter.ts`)
 - `markdownToTelegramHtml(md)` — Converts markdown to Telegram HTML subset (bold, italic, code, links, headers)
 - `splitMessage(text)` — Chunks for Telegram's 4096 char limit (splits on paragraphs, then lines)
@@ -372,6 +378,11 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 ---
 
 ## EventLoop (`services/EventLoop.ts`)
+
+**Dependencies**: All services plus `OctokitClient` (for gist upload)
+
+### Spec File Delivery (`sendSpecFiles`)
+When spec + analysis + idle flags are all met, reads spec files from `PlanSession`, generates a self-contained HTML page via `generateSpecHtml`, uploads as a private GitHub Gist via `OctokitClient.createGist`, and sends a single `htmlpreview.github.io` URL via Telegram. Falls back to chunked raw Telegram text if gist upload fails.
 
 ### State Machine (`ChatState`)
 Single `Ref<ChatState>` discriminated union with 7 states:
@@ -443,7 +454,7 @@ BranchParser (standalone)
 CommentTimer (requires TaskTracker, MessengerAdapter, BranchParser, AppRuntimeConfig)
 PlanSession (requires PlanCommandBuilder, AppContext)
 
-EventLoop (requires all of the above)
+EventLoop (requires all of the above + OctokitClient for gist upload)
 ```
 
 ---
