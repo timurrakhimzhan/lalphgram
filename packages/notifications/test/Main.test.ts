@@ -128,7 +128,7 @@ const makeCommentTimerMock = () =>
     shutdown: Effect.succeed(undefined)
   })
 
-const makePlanSessionMock = () =>
+const makePlanSessionMock = (overrides?: { isIdle?: Effect.Effect<boolean> }) =>
   PlanSession.of({
     start: vi.fn(() => Effect.succeed(undefined)),
     answer: vi.fn(() => Effect.succeed(undefined)),
@@ -137,6 +137,7 @@ const makePlanSessionMock = () =>
     approve: Effect.succeed(undefined),
     reject: Effect.succeed(undefined),
     isActive: Effect.succeed(false),
+    isIdle: overrides?.isIdle ?? Effect.succeed(false),
     events: Stream.never
   })
 
@@ -559,6 +560,7 @@ describe("plan spec approval", () => {
       approve: Effect.succeed(undefined),
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
       events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
     })
     const messengerMock = makeMessengerMock()
@@ -590,6 +592,7 @@ describe("plan spec approval", () => {
       approve: approveFn(),
       reject: Effect.succeed(undefined),
       isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
       events: Stream.make(new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
     })
     // Delay Approve so PlanSpecReady sets state to SpecReady first
@@ -722,6 +725,32 @@ describe("follow-up buffer vs interrupt choice", () => {
       )
     }).pipe(Effect.provide(layer))
   })
+
+  it.live("sends follow-up directly when Claude is idle (no menu)", () => {
+    // Arrange
+    const planSessionMock = makePlanSessionMock({ isIdle: Effect.succeed(true) })
+    const incomingStream = Stream.fromIterable([
+      ...planSetupMessages,
+      new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert — follow-up sent directly, no menu shown
+      expect(planSessionMock.sendFollowUp).toHaveBeenCalledWith("Also add tests")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Follow-up sent.")
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Send as follow-up or interrupt Claude?"
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
 })
 
 describe("plan abort", () => {
@@ -764,6 +793,7 @@ describe("plan abort", () => {
       approve: Effect.succeed(undefined),
       reject: rejectFn(),
       isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
       events: Stream.never
     })
     const incomingStream = Stream.fromIterable([
@@ -800,6 +830,7 @@ describe("plan abort", () => {
       approve: Effect.succeed(undefined),
       reject: rejectFn(),
       isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
       events: Stream.never
     })
     const incomingStream = Stream.fromIterable([

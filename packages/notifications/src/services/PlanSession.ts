@@ -109,6 +109,7 @@ export interface PlanSessionService {
   readonly approve: Effect.Effect<void, PlanSessionError>
   readonly reject: Effect.Effect<void, PlanSessionError>
   readonly isActive: Effect.Effect<boolean>
+  readonly isIdle: Effect.Effect<boolean>
   readonly events: Stream.Stream<PlanEvent, PlanSessionError>
 }
 
@@ -166,6 +167,7 @@ export const PlanSessionLive = Layer.scoped(
     const executor = yield* CommandExecutor.CommandExecutor
     const buildCommand = yield* PlanCommandBuilder
     const sessionRef = yield* Ref.make<Option.Option<ActiveSession>>(Option.none())
+    const idleRef = yield* Ref.make(false)
     const eventQueue = yield* Queue.unbounded<PlanEvent>()
     const seenFilePaths = yield* Ref.make<ReadonlySet<string>>(new Set())
 
@@ -190,6 +192,7 @@ export const PlanSessionLive = Layer.scoped(
         }
 
         yield* Ref.set(seenFilePaths, new Set())
+        yield* Ref.set(idleRef, false)
 
         const tempDir = pathService.join(appContext.configDir, "tmp")
         yield* fs.makeDirectory(tempDir, { recursive: true }).pipe(
@@ -343,6 +346,7 @@ export const PlanSessionLive = Layer.scoped(
             }
             if (msg.type === "result") {
               yield* flushPendingText
+              yield* Ref.set(idleRef, true)
               yield* Effect.log("Planner result received")
               return
             }
@@ -447,6 +451,7 @@ export const PlanSessionLive = Layer.scoped(
           })
         }
         const encoder = new TextEncoder()
+        yield* Ref.set(idleRef, false)
         yield* Queue.offer(current.value.stdinQueue, encoder.encode(text + "\n"))
       })
 
@@ -460,6 +465,7 @@ export const PlanSessionLive = Layer.scoped(
           })
         }
         const encoder = new TextEncoder()
+        yield* Ref.set(idleRef, false)
         const line = JSON.stringify({ type: "follow_up", text }) + "\n"
         yield* Queue.offer(current.value.stdinQueue, encoder.encode(line))
       })
@@ -474,6 +480,7 @@ export const PlanSessionLive = Layer.scoped(
           })
         }
         const encoder = new TextEncoder()
+        yield* Ref.set(idleRef, false)
         const line = JSON.stringify({ type: "shim_interrupt", text }) + "\n"
         yield* Queue.offer(current.value.stdinQueue, encoder.encode(line))
       })
@@ -487,6 +494,7 @@ export const PlanSessionLive = Layer.scoped(
         })
       }
       const encoder = new TextEncoder()
+      yield* Ref.set(idleRef, false)
       yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_approve" }) + "\n"))
     })
 
@@ -504,6 +512,7 @@ export const PlanSessionLive = Layer.scoped(
     })
 
     const isActive = Ref.get(sessionRef).pipe(Effect.map(Option.isSome))
+    const isIdle = Ref.get(idleRef)
 
     const events: Stream.Stream<PlanEvent, PlanSessionError> = Stream.fromQueue(eventQueue).pipe(
       Stream.mapError((err) => new PlanSessionError({ message: `Event stream error: ${String(err)}`, cause: err }))
@@ -517,6 +526,7 @@ export const PlanSessionLive = Layer.scoped(
       approve: approve.pipe(Effect.annotateLogs({ service: "PlanSession" })),
       reject: reject.pipe(Effect.annotateLogs({ service: "PlanSession" })),
       isActive,
+      isIdle,
       events
     })
   })

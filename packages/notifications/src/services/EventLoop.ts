@@ -348,7 +348,16 @@ export const runEventLoop = Effect.gen(function*() {
             }
             return
           }
-          yield* showFollowUpChoice(msg.text, current.planType)
+          const idle = yield* planSession.isIdle
+          if (idle) {
+            yield* planSession.sendFollowUp(msg.text).pipe(
+              Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
+              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+          } else {
+            yield* showFollowUpChoice(msg.text, current.planType)
+          }
           return
         }
         case "AwaitingFollowUpDecision": {
@@ -398,7 +407,17 @@ export const runEventLoop = Effect.gen(function*() {
             yield* abortToIdle(true)
             return
           }
-          yield* showFollowUpChoice(msg.text, current.planType)
+          const idleSpec = yield* planSession.isIdle
+          if (idleSpec) {
+            yield* Ref.set(state, { _tag: "SessionRunning", planType: current.planType })
+            yield* planSession.sendFollowUp(msg.text).pipe(
+              Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
+              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+          } else {
+            yield* showFollowUpChoice(msg.text, current.planType)
+          }
           return
         }
       }

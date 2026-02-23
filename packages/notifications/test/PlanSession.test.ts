@@ -592,4 +592,50 @@ describe("PlanSession", () => {
         expect(result.message).toBe("No active plan session")
       }).pipe(Effect.provide(testLayer))
     }))
+
+  it.live("isIdle returns true after result message, false after sendFollowUp", () =>
+    Effect.gen(function*() {
+      // Arrange — echo a text message followed by a result message, then keep stdin open via cat
+      const resultLine = JSON.stringify({ type: "result", subtype: "success" })
+      const payload = `${textMessage("output")}\n${resultLine}`
+      const testLayer = makeTestLayer(echoCommandLayer(payload))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Assert — initially not idle
+        const before = yield* session.isIdle
+        expect(before).toBe(false)
+
+        // Act — start session and wait for result
+        yield* session.start("test plan")
+        yield* session.events.pipe(
+          Stream.filter((e) => e._tag === "PlanTextOutput"),
+          Stream.take(1),
+          Stream.runDrain
+        )
+        yield* Effect.sleep("50 millis")
+
+        // Assert — idle after result
+        const afterResult = yield* session.isIdle
+        expect(afterResult).toBe(true)
+      }).pipe(Effect.provide(testLayer))
+    }))
+
+  it.live("isIdle returns false after start", () =>
+    Effect.gen(function*() {
+      // Arrange — cat keeps running so the session stays active
+      const testLayer = makeTestLayer(catCommandLayer)
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act
+        yield* session.start("test plan")
+
+        // Assert — not idle right after start
+        const idle = yield* session.isIdle
+        expect(idle).toBe(false)
+      }).pipe(Effect.provide(testLayer))
+    }))
 })

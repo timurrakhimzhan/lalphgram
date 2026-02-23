@@ -284,6 +284,7 @@ Manages interactive Claude plan sessions via subprocess.
 | `approve` | `Effect<void>` | Send `{ type: "shim_approve" }` to stdin |
 | `reject` | `Effect<void>` | Send `{ type: "shim_abort" }` and close session |
 | `isActive` | `Effect<boolean>` | Check if session is running |
+| `isIdle` | `Effect<boolean>` | True after `result` message, false when Claude is working |
 | `events` | `Stream<PlanEvent>` | Stream of plan events |
 
 **Plan Events**:
