@@ -35,7 +35,7 @@ import {
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
-import { PlanAnalysisReady, PlanSession } from "../src/services/PlanSession.js"
+import { PlanAnalysisReady, PlanQuestion, PlanSession } from "../src/services/PlanSession.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
@@ -854,6 +854,135 @@ describe("plan abort", () => {
         expect.objectContaining({
           text: "Plan aborted.",
           replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+})
+
+describe("my own answer flow", () => {
+  const questionEvent = new PlanQuestion({
+    questions: [{
+      question: "Which approach?",
+      header: "Approach",
+      options: [{ label: "Option A" }, { label: "Option B" }]
+    }]
+  })
+
+  const makeQuestionPlanSession = (overrides?: {
+    answerFn?: ReturnType<typeof vi.fn>
+    rejectFn?: ReturnType<typeof vi.fn>
+  }) => {
+    const answerFn = overrides?.answerFn ?? vi.fn(() => Effect.succeed(undefined))
+    const rejectFn = overrides?.rejectFn ?? vi.fn(() => Effect.succeed(undefined))
+    return PlanSession.of({
+      start: vi.fn(() => Effect.succeed(undefined)),
+      answer: answerFn,
+      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+      interrupt: vi.fn(() => Effect.succeed(undefined)),
+      approve: Effect.succeed(undefined),
+      reject: rejectFn(),
+      isActive: Effect.succeed(false),
+      isIdle: Effect.succeed(false),
+      events: Stream.make(questionEvent)
+    })
+  }
+
+  it.live("prompts for free-text then forwards typed answer", () => {
+    // Arrange
+    const answerFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = makeQuestionPlanSession({ answerFn })
+    // Plan setup messages get state to SessionRunning, then delayed "Custom answer" + free-text
+    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(20)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+          )
+        )
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(40)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Use approach C instead", from: "user" }))
+          )
+        )
+      )
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(80))
+
+      // Assert — prompt shown after tapping "Custom answer"
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Type your answer:")
+      // Free-text forwarded as the answer
+      expect(answerFn).toHaveBeenCalledWith("Use approach C instead")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("abort works while awaiting free-text answer", () => {
+    // Arrange
+    const rejectFn = vi.fn(() => Effect.succeed(undefined))
+    const planSessionMock = makeQuestionPlanSession({ rejectFn })
+    const incomingStream = Stream.fromIterable(planSetupMessages).pipe(
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(20)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+          )
+        )
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sleep(Duration.millis(40)).pipe(
+            Effect.as(new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" }))
+          )
+        )
+      )
+    )
+    const messengerMock = makeMessengerMock(incomingStream)
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(80))
+
+      // Assert — abort still works, answer never forwarded
+      expect(rejectFn).toHaveBeenCalled()
+      expect(planSessionMock.answer).not.toHaveBeenCalled()
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Plan aborted.",
+          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("appends Custom answer button to question options", () => {
+    // Arrange
+    const planSessionMock = makeQuestionPlanSession()
+    const messengerMock = makeMessengerMock()
+    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* runEventLoop
+      yield* Effect.sleep(Duration.millis(50))
+
+      // Assert — question rendered with "Custom answer" appended
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: [
+            { label: "Option A" },
+            { label: "Option B" },
+            { label: "Custom answer" }
+          ]
         })
       )
     }).pipe(Effect.provide(layer))

@@ -111,6 +111,7 @@ export const BUFFER_BUTTON_LABEL = "Buffer"
 export const INTERRUPT_BUTTON_LABEL = "Interrupt"
 export const OMIT_BUTTON_LABEL = "Omit"
 export const ABORT_BUTTON_LABEL = "Abort"
+const MY_ANSWER_BUTTON_LABEL = "Custom answer"
 
 type ChatState =
   | { readonly _tag: "Idle" }
@@ -139,6 +140,7 @@ export const runEventLoop = Effect.gen(function*() {
   const pendingAnswerCount = yield* Ref.make(0)
   const pendingOptionLabels = yield* Ref.make<ReadonlySet<string>>(new Set())
   const analysisFollowUpSent = yield* Ref.make(false)
+  const awaitingFreeTextAnswer = yield* Ref.make(false)
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -236,6 +238,7 @@ export const runEventLoop = Effect.gen(function*() {
       yield* Ref.set(pendingAnswerCount, 0)
       yield* Ref.set(pendingOptionLabels, new Set())
       yield* Ref.set(analysisFollowUpSent, false)
+      yield* Ref.set(awaitingFreeTextAnswer, false)
       yield* Effect.log("Plan aborted")
       yield* notifier.sendMessage({ text: "Plan aborted.", replyKeyboard: IDLE_KEYBOARD })
     })
@@ -335,8 +338,29 @@ export const runEventLoop = Effect.gen(function*() {
           }
           const pending = yield* Ref.get(pendingAnswerCount)
           const options = yield* Ref.get(pendingOptionLabels)
+          const isAwaitingFreeText = yield* Ref.get(awaitingFreeTextAnswer)
           if (pending > 0 && options.has(msg.text)) {
+            if (msg.text === MY_ANSWER_BUTTON_LABEL) {
+              yield* Ref.set(awaitingFreeTextAnswer, true)
+              yield* notifier.sendMessage("Type your answer:")
+              return
+            }
+            yield* Ref.set(awaitingFreeTextAnswer, false)
             yield* Effect.log("Forwarding answer to plan session")
+            yield* Ref.update(pendingAnswerCount, (n) => n - 1)
+            yield* planSession.answer(msg.text).pipe(
+              Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
+              Effect.orElseSucceed(() => undefined)
+            )
+            const newPending = yield* Ref.get(pendingAnswerCount)
+            if (newPending <= 0) {
+              yield* Ref.set(pendingOptionLabels, new Set())
+            }
+            return
+          }
+          if (isAwaitingFreeText) {
+            yield* Ref.set(awaitingFreeTextAnswer, false)
+            yield* Effect.log("Forwarding free-text answer to plan session")
             yield* Ref.update(pendingAnswerCount, (n) => n - 1)
             yield* planSession.answer(msg.text).pipe(
               Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
@@ -441,13 +465,14 @@ export const runEventLoop = Effect.gen(function*() {
             yield* Ref.update(pendingAnswerCount, (n) =>
               n + e.questions.length)
             const labels = e.questions.flatMap((q) => q.options?.map((o) => o.label) ?? [])
-            yield* Ref.update(pendingOptionLabels, (s) => new Set([...s, ...labels]))
+            yield* Ref.update(pendingOptionLabels, (s) => new Set([...s, ...labels, MY_ANSWER_BUTTON_LABEL]))
             yield* Effect.forEach(e.questions, (q) => {
               const formatted = markdownToTelegramHtml(q.question)
               const header = q.header != null ? `<b>${markdownToTelegramHtml(q.header)}</b>\n` : ""
+              const baseOptions = q.options?.map((o) => ({ label: o.label })) ?? []
               return notifier.sendMessage({
                 text: `${header}${formatted}`,
-                options: q.options?.map((o) => ({ label: o.label }))
+                options: [...baseOptions, { label: MY_ANSWER_BUTTON_LABEL }]
               })
             })
           })),
