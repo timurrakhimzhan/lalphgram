@@ -37,7 +37,7 @@ import {
   MessengerAdapter,
   MessengerAdapterError
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
-import { OctokitClient, OctokitClientError } from "../src/services/OctokitClient.js"
+import { OctokitClient } from "../src/services/OctokitClient.js"
 import type { OctokitClientService } from "../src/services/OctokitClient.js"
 import type { PlanEvent } from "../src/services/PlanSession.js"
 import {
@@ -50,6 +50,7 @@ import {
 } from "../src/services/PlanSession.js"
 import { ProjectStore } from "../src/services/ProjectStore.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
+import { SpecUploader, SpecUploaderError } from "../src/services/SpecUploader.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
@@ -229,6 +230,11 @@ const makeProjectStoreMock = (overrides?: {
     )
   })
 
+const makeSpecUploaderMock = () =>
+  SpecUploader.of({
+    upload: vi.fn(() => Effect.succeed({ url: "https://telegra.ph/test-spec" }))
+  })
+
 const makeTestLayer = (
   prEvents: ReadonlyArray<PullRequestEvent>,
   overrides: {
@@ -239,6 +245,7 @@ const makeTestLayer = (
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
     octokitClientMock?: ReturnType<typeof makeOctokitClientMock>
     projectStoreMock?: ReturnType<typeof makeProjectStoreMock>
+    specUploaderMock?: ReturnType<typeof makeSpecUploaderMock>
     taskEvents?: ReadonlyArray<TaskTrackerEvent>
     autoMergeEvents?: ReadonlyArray<AutoMergeEvent>
   } = {}
@@ -259,6 +266,7 @@ const makeTestLayer = (
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
   const octokitClientMock = overrides.octokitClientMock ?? makeOctokitClientMock()
   const projectStoreMock = overrides.projectStoreMock ?? makeProjectStoreMock()
+  const specUploaderMock = overrides.specUploaderMock ?? makeSpecUploaderMock()
 
   return {
     layer: Layer.mergeAll(
@@ -272,6 +280,7 @@ const makeTestLayer = (
       Layer.succeed(ProjectStore, projectStoreMock),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
       Layer.succeed(OctokitClient, octokitClientMock),
+      Layer.succeed(SpecUploader, specUploaderMock),
       BranchParserLive
     ),
     messengerMock,
@@ -280,7 +289,8 @@ const makeTestLayer = (
     commentTimerMock,
     planSessionMock,
     octokitClientMock,
-    projectStoreMock
+    projectStoreMock,
+    specUploaderMock
   }
 }
 
@@ -778,11 +788,11 @@ describe("plan spec approval", () => {
       expect(approveFn).toHaveBeenCalled()
     }))
 
-  it.effect("uploads gist and sends URL when all conditions met", () =>
+  it.effect("uploads spec and sends URL when all conditions met", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const octokitClientMock = makeOctokitClientMock()
+      const specUploaderMock = makeSpecUploaderMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -805,7 +815,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
 
       // Act — process setup messages first, then fire plan events
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -817,18 +827,13 @@ describe("plan spec approval", () => {
       ])
       yield* flush
 
-      // Assert — gist created and URL sent
-      expect(octokitClientMock.createGist).toHaveBeenCalledWith(
-        expect.objectContaining({
-          description: "Spec: Feature",
-          isPublic: false,
-          files: expect.objectContaining({
-            "spec.html": expect.objectContaining({ content: expect.stringContaining("<!DOCTYPE html>") })
-          })
-        })
+      // Assert — upload called and URL sent
+      expect(specUploaderMock.upload).toHaveBeenCalledWith(
+        expect.stringContaining("<!DOCTYPE html>"),
+        "Spec: Feature"
       )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
-        expect.stringContaining("htmlpreview.github.io")
+        expect.stringContaining("telegra.ph")
       )
       // No raw file headers sent
       expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
@@ -843,11 +848,11 @@ describe("plan spec approval", () => {
       )
     }))
 
-  it.effect("includes mermaid content in gist HTML", () =>
+  it.effect("includes mermaid content in uploaded HTML", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const octokitClientMock = makeOctokitClientMock()
+      const specUploaderMock = makeSpecUploaderMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -870,7 +875,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -882,24 +887,19 @@ describe("plan spec approval", () => {
       ])
       yield* flush
 
-      // Assert — gist HTML contains mermaid pre tag
-      expect(octokitClientMock.createGist).toHaveBeenCalledWith(
-        expect.objectContaining({
-          files: expect.objectContaining({
-            "spec.html": expect.objectContaining({
-              content: expect.stringContaining("<pre class=\"mermaid\">")
-            })
-          })
-        })
+      // Assert — uploaded HTML contains mermaid pre tag
+      expect(specUploaderMock.upload).toHaveBeenCalledWith(
+        expect.stringContaining("<pre class=\"mermaid\">"),
+        expect.any(String)
       )
     }))
 
-  it.effect("falls back to raw text when gist upload fails", () =>
+  it.effect("falls back to raw text when upload fails", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const octokitClientMock = makeOctokitClientMock({
-        createGist: vi.fn(() => Effect.fail(new OctokitClientError({ message: "API error", cause: null })))
+      const specUploaderMock = SpecUploader.of({
+        upload: vi.fn(() => Effect.fail(new SpecUploaderError({ message: "API error", cause: null })))
       })
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
@@ -923,7 +923,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, octokitClientMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -935,7 +935,7 @@ describe("plan spec approval", () => {
       ])
       yield* flush
 
-      // Assert — falls back to raw text (file headers sent, no gist URL)
+      // Assert — falls back to raw text (file headers sent, no upload URL)
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("<b>analysis.md</b>")
       )
@@ -946,7 +946,7 @@ describe("plan spec approval", () => {
         expect.stringContaining("<b>test.md</b>")
       )
       expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
-        expect.stringContaining("htmlpreview.github.io")
+        expect.stringContaining("telegra.ph")
       )
     }))
 

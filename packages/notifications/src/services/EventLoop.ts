@@ -15,10 +15,12 @@ import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
 import { MessengerAdapter, type OutgoingMessage } from "./MessengerAdapter/MessengerAdapter.js"
 import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
-import { OctokitClient, OctokitClientLive } from "./OctokitClient.js"
+import { OctokitClientLive } from "./OctokitClient.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
 import { ProjectStore, ProjectStoreLive } from "./ProjectStore.js"
 import { PullRequestTracker, PullRequestTrackerLive } from "./PullRequestTracker.js"
+import { SpecUploader } from "./SpecUploader.js"
+import { SpecUploaderMap } from "./SpecUploaderMap.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 import { TrackerLayerMap } from "./TrackerLayerMap.js"
 
@@ -76,6 +78,20 @@ const planSessionLayer = PlanSessionLive.pipe(
 
 const projectStoreLayer = ProjectStoreLive
 
+const specUploaderMapLayer = SpecUploaderMap.Default.pipe(
+  Layer.provide(octokitLayer)
+)
+
+const specUploaderLayer = Layer.unwrapEffect(
+  Effect.gen(function*() {
+    const config = yield* LalphConfig
+    return SpecUploaderMap.get(config.specUploader)
+  })
+).pipe(
+  Layer.provide(specUploaderMapLayer),
+  Layer.provide(lalphConfigLayer)
+)
+
 /**
  * The main layer providing all services for the event loop.
  * Requires AppRuntimeConfig, TelegramConfigStore, and PlanCommandBuilder to be provided externally.
@@ -91,7 +107,8 @@ export const MainLayer = Layer.mergeAll(
   branchParserLayer,
   planSessionLayer,
   octokitLayer,
-  projectStoreLayer
+  projectStoreLayer,
+  specUploaderLayer
 )
 
 /**
@@ -170,7 +187,7 @@ export const runEventLoop = Effect.gen(function*() {
   const taskTracker = yield* TaskTracker
   const branchParser = yield* BranchParser
   const planSession = yield* PlanSession
-  const octokitClient = yield* OctokitClient
+  const specUploader = yield* SpecUploader
   const projectStore = yield* ProjectStore
 
   const state = yield* Ref.make<ChatState>({ _tag: "Idle" })
@@ -222,16 +239,10 @@ export const runEventLoop = Effect.gen(function*() {
       if (Option.isSome(readResult)) {
         const files = readResult.value
         const html = generateSpecHtml(files)
-        const gistResult = yield* octokitClient.createGist({
-          description: `Spec: ${planType}`,
-          files: { "spec.html": { content: html } },
-          isPublic: false
-        }).pipe(Effect.option)
+        const uploadResult = yield* specUploader.upload(html, `Spec: ${planType}`).pipe(Effect.option)
 
-        if (Option.isSome(gistResult)) {
-          const rawUrl = gistResult.value.files["spec.html"]?.rawUrl ?? gistResult.value.htmlUrl
-          const viewUrl = `https://htmlpreview.github.io/?${rawUrl}`
-          yield* notifier.sendMessage(`<a href="${viewUrl}">View spec</a>`)
+        if (Option.isSome(uploadResult)) {
+          yield* notifier.sendMessage(`<a href="${uploadResult.value.url}">View spec</a>`)
         } else {
           yield* sendSpecFilesRaw(files)
         }
