@@ -274,7 +274,7 @@ Uploads plan overview files to a hosting backend and returns a viewable URL. Tak
 
 ### TelegraphPlanOverviewUploaderLive (PlanOverviewUploader impl, default)
 - Creates anonymous Telegraph account on construction via `POST /createAccount`
-- Generates HTML via `generateSpecHtml`, converts via `toTelegraphContent` using `better-telegraph`'s `parseHtml` (Mermaid→PlantUML→kroki.io SVG images, heading downgrade, unsupported tag stripping)
+- Converts spec files directly to Telegraph nodes via `specFilesToTelegraphNodes` (Mermaid→PlantUML→kroki.io SVG images, heading downgrade h1/h2→h3 h3+→h4)
 - Uploads pages via `POST /createPage` with UUID title for unguessable URL
 - Returns `telegra.ph` URL
 - **Layer**: `TelegraphPlanOverviewUploaderLive` — requires `HttpClient`
@@ -424,8 +424,9 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 ### MermaidToPlantUml (`lib/MermaidToPlantUml.ts`)
 - `mermaidToPlantUml(mermaid)` — Pure function converting Mermaid class diagram syntax to PlantUML. Handles `classDiagram`→`@startuml/@enduml`, `~generics~`→`<generics>`, method return type formatting, relationship arrows
 
-### TelegraphHtml (`lib/TelegraphHtml.ts`)
-- `toTelegraphContent(html)` — Pure function transforming `generateSpecHtml` output into Telegraph-compatible Node array. Extracts body content, replaces `<pre class="mermaid">` blocks with `<img>` tags pointing to kroki.io PlantUML SVG URLs (via zlib+base64url encoding), then uses `better-telegraph`'s `parseHtml` for HTML→Telegraph Node conversion (handles heading downgrades, unsupported tag stripping)
+### TelegraphMarkdown (`lib/TelegraphMarkdown.ts`)
+- `markdownToTelegraphNodes(md)` — Pure function converting markdown directly to Telegraph Node array. Two-phase parser: block-level state machine (code fences, headings h1/h2→h3 h3+→h4, HR, ul/ol lists, blockquotes, paragraphs) + recursive inline scanner (code, links, bold, italic, strikethrough). Skips lossy HTML intermediate step
+- `specFilesToTelegraphNodes(files)` — Converts `ReadonlyArray<SpecFile>` to Telegraph Node array. Adds file name as h3 heading per file, converts mermaid files to kroki.io PlantUML SVG `<img>` nodes (via `mermaidToPlantUml` + zlib deflate + base64url encoding), parses markdown files with `markdownToTelegraphNodes`
 
 ### TelegramFormatter (`lib/TelegramFormatter.ts`)
 - `markdownToTelegramHtml(md)` — Converts markdown to Telegram HTML subset (bold, italic, code, links, headers)

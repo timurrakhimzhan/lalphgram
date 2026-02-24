@@ -8,7 +8,7 @@ import { Context, Data, Effect, Layer, Schema } from "effect"
 import * as Crypto from "node:crypto"
 import type { SpecFile } from "../lib/SpecHtmlGenerator.js"
 import { generateSpecHtml } from "../lib/SpecHtmlGenerator.js"
-import { toTelegraphContent } from "../lib/TelegraphHtml.js"
+import { specFilesToTelegraphNodes } from "../lib/TelegraphMarkdown.js"
 import { OctokitClient } from "./OctokitClient.js"
 
 /**
@@ -138,8 +138,7 @@ export const TelegraphPlanOverviewUploaderLive = Layer.effect(
     return PlanOverviewUploader.of({
       upload: ({ description, files }) =>
         Effect.gen(function*() {
-          const html = generateSpecHtml(files)
-          const content = toTelegraphContent(html)
+          const content = specFilesToTelegraphNodes(files)
           const title = Crypto.randomUUID()
 
           const pageResult = yield* telegraphPost(

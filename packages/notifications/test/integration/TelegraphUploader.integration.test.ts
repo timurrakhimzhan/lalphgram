@@ -2,8 +2,7 @@ import { FetchHttpClient } from "@effect/platform"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import type { SpecFile } from "../../src/lib/SpecHtmlGenerator.js"
-import { generateSpecHtml } from "../../src/lib/SpecHtmlGenerator.js"
-import { toTelegraphContent } from "../../src/lib/TelegraphHtml.js"
+import { specFilesToTelegraphNodes } from "../../src/lib/TelegraphMarkdown.js"
 import { PlanOverviewUploader, TelegraphPlanOverviewUploaderLive } from "../../src/services/PlanOverviewUploader.js"
 
 const TestUploader = TelegraphPlanOverviewUploaderLive.pipe(Layer.provide(FetchHttpClient.layer))
@@ -99,7 +98,7 @@ describe("Telegraph uploader integration", () => {
   )
 
   it.live(
-    "toTelegraphContent produces valid Node array for Telegraph API",
+    "specFilesToTelegraphNodes produces valid Node array for Telegraph API",
     () =>
       Effect.sync(() => {
         // Arrange
@@ -107,18 +106,13 @@ describe("Telegraph uploader integration", () => {
           { name: "analysis.md", content: analysisContent, mermaid: false },
           { name: "services.mmd", content: servicesContent, mermaid: true }
         ]
-        const html = generateSpecHtml(files)
 
         // Act
-        const content = toTelegraphContent(html)
+        const content = specFilesToTelegraphNodes(files)
 
         // Assert — returns Node array
         expect(Array.isArray(content)).toBe(true)
         const str = JSON.stringify(content)
-
-        // Assert — no script/style
-        expect(str).not.toContain("mermaid.initialize")
-        expect(str).not.toContain("font-family")
 
         // Assert — mermaid replaced with kroki img
         expect(str).toContain("kroki.io/plantuml/svg/")
