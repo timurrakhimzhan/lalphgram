@@ -807,14 +807,14 @@ export const runEventLoop = Effect.gen(function*() {
               )
             })
           })),
-        Match.tag("PlanSpecCreated", (e) =>
+        Match.tag("PlanSpecCreated", () =>
           Effect.gen(function*() {
             const current = yield* Ref.get(state)
             const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
                 current._tag === "SpecReady"
               ? current.planType
               : "Other"
-            yield* notifier.sendMessage(`Spec file created: <code>${e.filePath}</code>`)
+
             const alreadySent = yield* Ref.getAndSet(analysisFollowUpSent, true)
             if (!alreadySent) {
               yield* planSession.sendFollowUp(getAnalysisPrompt(planType)).pipe(
@@ -825,14 +825,14 @@ export const runEventLoop = Effect.gen(function*() {
             yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, spec: true }))
             yield* showApproveIfReady
           })),
-        Match.tag("PlanSpecUpdated", (e) =>
+        Match.tag("PlanSpecUpdated", () =>
           Effect.gen(function*() {
             const current = yield* Ref.get(state)
             const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
                 current._tag === "SpecReady"
               ? current.planType
               : "Other"
-            yield* notifier.sendMessage(`Spec file updated: <code>${e.filePath}</code>`)
+
             const alreadySent = yield* Ref.getAndSet(analysisFollowUpSent, true)
             if (!alreadySent) {
               yield* planSession.sendFollowUp(getAnalysisPrompt(planType)).pipe(
