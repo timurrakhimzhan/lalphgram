@@ -109,7 +109,7 @@ interface ActiveSession {
  * @category services
  */
 export interface PlanSessionService {
-  readonly start: (planText: string) => Effect.Effect<void, PlanSessionError>
+  readonly start: (planText: string, projectId?: string | undefined) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly interrupt: (text: string) => Effect.Effect<void, PlanSessionError>
@@ -196,7 +196,7 @@ export const PlanSessionLive = Layer.scoped(
 
     yield* Effect.addFinalizer(() => closeActiveSession)
 
-    const start = (planText: string) =>
+    const start = (planText: string, projectId?: string | undefined) =>
       Effect.gen(function*() {
         const current = yield* Ref.get(sessionRef)
         if (Option.isSome(current)) {
@@ -247,6 +247,14 @@ export const PlanSessionLive = Layer.scoped(
           Effect.catchAll((err) => Effect.logError(`stdin write error: ${String(err)}`)),
           Effect.forkDaemon
         )
+
+        if (projectId != null) {
+          const encoder = new TextEncoder()
+          yield* Queue.offer(stdinQueue, encoder.encode(projectId + "\n"))
+          yield* Effect.log("Pre-answered project prompt").pipe(
+            Effect.annotateLogs({ projectId })
+          )
+        }
 
         const decoder = new TextDecoder()
         const pendingTextRef = yield* Ref.make<Option.Option<{ messageId: string; text: string }>>(
@@ -563,7 +571,7 @@ export const PlanSessionLive = Layer.scoped(
     )
 
     return PlanSession.of({
-      start: (planText) => start(planText).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      start: (planText, projectId) => start(planText, projectId).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       answer: (text) => answer(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       sendFollowUp: (text) => sendFollowUp(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       interrupt: (text) => interrupt(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),

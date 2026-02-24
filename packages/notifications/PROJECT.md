@@ -311,6 +311,22 @@ Wraps `@linear/sdk` LinearClient. Refreshes if token changes.
 
 ---
 
+### ProjectStore
+**File**: `services/ProjectStore.ts` | **Tag**: `ProjectStore`
+
+Reads/writes lalph project configuration from `~/.lalph/config/settings.projects`.
+
+| Method | Signature | Description |
+|---|---|---|
+| `listProjects` | `Effect<ReadonlyArray<LalphProject>>` | Returns only enabled projects |
+| `getProject(id)` | `Effect<LalphProject>` | Finds project by id |
+| `createProject(data)` | `Effect<LalphProject>` | Appends new project and persists to file |
+
+**Error**: `ProjectStoreError`
+**Layer**: `ProjectStoreLive` — requires `AppContext`, `FileSystem`, `Path`
+
+---
+
 ### PlanSession
 **File**: `services/PlanSession.ts` | **Tag**: `PlanSession`
 
@@ -318,7 +334,7 @@ Manages interactive Claude plan sessions via subprocess.
 
 | Method | Signature | Description |
 |---|---|---|
-| `start(planText)` | `Effect<void>` | Save plan to temp file, spawn `lalph plan` subprocess |
+| `start(planText, projectId?)` | `Effect<void>` | Save plan to temp file, spawn `lalph plan` subprocess. If projectId provided, sends it to stdin before plan text. |
 | `answer(text)` | `Effect<void>` | Send plain text answer to stdin (for ask_user responses) |
 | `sendFollowUp(text)` | `Effect<void>` | Send `{ type: "follow_up", text }` to stdin |
 | `interrupt(text)` | `Effect<void>` | Send `{ type: "shim_interrupt", text }` to stdin |
@@ -394,6 +410,7 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 |---|---|
 | `schemas/GitHubSchemas.ts` | `GitHubRepo`, `GitHubPullRequest` (id, number, title, state, headRef, headSha, hasConflicts, repo), `GitHubComment` |
 | `schemas/TrackerSchemas.ts` | `TrackerIssue` (id, title, state, url, createdAt, updatedAt) |
+| `schemas/ProjectSchemas.ts` | `LalphProject` (id, enabled, targetBranch: Option\<string\>, concurrency, gitFlow: "pr"\|"commit", reviewAgent) |
 | `schemas/CredentialSchemas.ts` | `LalphGithubToken` ({ token }), `LalphLinearToken` ({ token, expiresAt, refreshToken }) |
 | `schemas/LinearSchemas.ts` | `LinearIssueNode`, `LinearWorkflowState` |
 
@@ -429,27 +446,32 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 When spec + analysis + idle flags are all met, reads spec files from `PlanSession`, generates a self-contained HTML page via `generateSpecHtml`, uploads via `SpecUploader.upload`, and sends the returned URL via Telegram. Falls back to chunked raw Telegram text if upload fails.
 
 ### State Machine (`ChatState`)
-Single `Ref<ChatState>` discriminated union with 7 states:
+Single `Ref<ChatState>` discriminated union with 9 states:
 
 | State | Data | Reply Keyboard |
 |---|---|---|
-| `Idle` | — | [Plan] |
-| `SelectingPlanType` | — | (inline: Feature/Bug/Refactor/Other/Abort) |
-| `CollectingPlan` | `planType`, `buffer` | [Done, Abort] |
-| `SessionRunning` | — | [Abort] |
+| `Idle` | — | [Plan, New project] |
+| `SelectingProject` | — | (inline: project buttons + New project + Abort) |
+| `SelectingPlanType` | `projectId` | (inline: Feature/Bug/Refactor/Other/Abort) |
+| `CollectingPlan` | `projectId`, `planType`, `buffer` | [Done, Abort] |
+| `SessionRunning` | `projectId` | [Abort] |
 | `AwaitingAnswers` | `remaining` | [Abort] |
-| `AwaitingFollowUpDecision` | `message` | (inline: Buffer/Interrupt/Omit/Abort) |
-| `SpecReady` | — | [Approve, Abort] |
+| `AwaitingFollowUpDecision` | `projectId`, `message` | (inline: Buffer/Interrupt/Omit/Abort) |
+| `SpecReady` | `projectId` | [Approve, Abort] |
+| `CreatingProject` | `step`, `data`, `continueWithPlan` | [Abort] |
 
 ### State Transitions (incoming messages)
 
-- **Idle** + "Plan" → `SelectingPlanType`
+- **Idle** + "Plan" → list projects: 0 → error, 1 → auto-select `SelectingPlanType`, >1 → `SelectingProject`
+- **Idle** + "New project" → `CreatingProject` (continueWithPlan=false)
+- **SelectingProject** + project → `SelectingPlanType`; + "New project" → `CreatingProject` (continueWithPlan=true); + "Abort" → `Idle`
 - **SelectingPlanType** + plan type → `CollectingPlan`; + "Abort" → `Idle`
-- **CollectingPlan** + text → buffer it; + "Done" → `SessionRunning` (start session); + "Abort" → `Idle`
+- **CollectingPlan** + text → buffer it; + "Done" → `SessionRunning` (start session with projectId); + "Abort" → `Idle`
 - **SessionRunning** + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
 - **AwaitingAnswers** + text → answer, decrement; if 0 remaining → `SessionRunning`; + "Abort" → reject + `Idle`
 - **AwaitingFollowUpDecision** + "Buffer"/"Interrupt"/"Omit" → handle + `SessionRunning`; + "Abort" → reject + `Idle`
 - **SpecReady** + "Approve" → approve + `SessionRunning`; + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
+- **CreatingProject** → 5-step wizard (Name→Concurrency→TargetBranch→GitFlow→ReviewAgent) → createProject → if continueWithPlan: `SelectingPlanType`, else: `Idle`
 
 ### State Transitions (plan events)
 
@@ -500,6 +522,7 @@ AppRuntimeConfig (from CLI args)
 BranchParser (standalone)
 CommentTimer (requires TaskTracker, MessengerAdapter, BranchParser, AppRuntimeConfig)
 PlanSession (requires PlanCommandBuilder, AppContext)
+ProjectStore (requires AppContext, FileSystem, Path)
 
 EventLoop (requires all of the above + SpecUploader for spec hosting)
 ```
