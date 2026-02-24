@@ -650,17 +650,8 @@ export const chatMachine = Machine.make(
                   Effect.tapError((err) => Effect.logError(`Plan approve error: ${err.message}`)),
                   Effect.orElseSucceed(() => undefined)
                 )
-                return reply(ChatState.SessionRunning({
-                  projectId: state.projectId,
-                  planType: state.planType,
-                  pendingAnswerCount: 0,
-                  pendingOptionLabels: new Set(),
-                  answersBuffer: [],
-                  awaitingFreeTextAnswer: false,
-                  lastQuestionMessage: Option.none(),
-                  readyFlags: new ReadyFlags({ ...state.readyFlags, idle: false }),
-                  analysisFollowUpSent: state.analysisFollowUpSent
-                }))
+                yield* notifier.sendMessage({ text: "Spec approved.", replyKeyboard: IDLE_KEYBOARD })
+                return reply(ChatState.Idle())
               }
               if (text === ABORT_BUTTON_LABEL) {
                 yield* abortToIdle(true)

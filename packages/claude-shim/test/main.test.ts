@@ -413,7 +413,7 @@ describe("shimProgram", () => {
 describe("shimProgram post-handshake control", () => {
   const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-  it.effect("offers approve text and closes queue on shim_approve", () => {
+  it.effect("closes queue without user message on shim_approve", () => {
     // Arrange
     const stdinStream = new PassThrough()
     stdinStream.write(SHIM_START_LINE)
@@ -437,58 +437,13 @@ describe("shimProgram post-handshake control", () => {
       // Act
       yield* shimProgram
 
-      // Assert
+      // Assert — only the initial prompt, no approve message
       const messages = yield* collectPromptMessages(mockCreateQuery)
-      expect(messages).toHaveLength(2)
+      expect(messages).toHaveLength(1)
       expect(messages[0]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Plan this" },
         session_id: ""
-      })
-      expect(messages[1]).toMatchObject({
-        type: "user",
-        message: { role: "user", content: "Approved! Build it." },
-        session_id: "test-session"
-      })
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.effect("uses default approve text when shim_approve has no text field", () => {
-    // Arrange
-    const stdinStream = new PassThrough()
-    stdinStream.write(SHIM_START_LINE)
-
-    const gen = (async function*() {
-      yield { type: "system", subtype: "init", session_id: "test-session" }
-      yield { type: "result", subtype: "success" }
-      stdinStream.write(JSON.stringify({ type: "shim_approve" }) + "\n")
-      await delay(50)
-    })()
-
-    const mockQuery = createCustomMockQuery(gen)
-    const mockCreateQuery = vi.fn().mockReturnValue(mockQuery)
-    const layer = makeTestLayer({
-      args: ["Plan this"],
-      stdinStream,
-      mockCreateQuery
-    })
-
-    return Effect.gen(function*() {
-      // Act
-      yield* shimProgram
-
-      // Assert
-      const messages = yield* collectPromptMessages(mockCreateQuery)
-      expect(messages).toHaveLength(2)
-      expect(messages[0]).toMatchObject({
-        type: "user",
-        message: { role: "user", content: "Plan this" },
-        session_id: ""
-      })
-      expect(messages[1]).toMatchObject({
-        type: "user",
-        message: { role: "user", content: "The user has approved. Proceed with implementation." },
-        session_id: "test-session"
       })
     }).pipe(Effect.provide(layer))
   })
@@ -596,9 +551,9 @@ describe("shimProgram post-handshake control", () => {
       // Act
       yield* shimProgram
 
-      // Assert
+      // Assert — follow_up adds a message, but shim_approve only closes the queue
       const messages = yield* collectPromptMessages(mockCreateQuery)
-      expect(messages).toHaveLength(3)
+      expect(messages).toHaveLength(2)
       expect(messages[0]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Plan this" },
@@ -607,10 +562,6 @@ describe("shimProgram post-handshake control", () => {
       expect(messages[1]).toMatchObject({
         type: "user",
         message: { role: "user", content: "Also consider edge cases" }
-      })
-      expect(messages[2]).toMatchObject({
-        type: "user",
-        message: { role: "user", content: "Looks good, proceed" }
       })
     }).pipe(Effect.provide(layer))
   })

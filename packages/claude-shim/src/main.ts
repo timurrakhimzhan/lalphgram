@@ -161,14 +161,7 @@ export const shimProgram = Effect.gen(function*() {
             return
           }
           case "shim_approve": {
-            const approveText = msg.text ?? "The user has approved. Proceed with implementation."
             yield* writeDebug("shim_approve intercepted")
-            yield* Queue.offer(followUpQueue, {
-              type: "user",
-              message: { role: "user", content: approveText },
-              parent_tool_use_id: null,
-              session_id: sessionId
-            })
             yield* Queue.offer(followUpQueue, FollowUpStop)
             return
           }

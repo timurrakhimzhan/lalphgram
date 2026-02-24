@@ -95,6 +95,11 @@ const lalphNotifyCommand = CliCommand.make(
           const shimPath = pathService.join(shimDir, "claude")
           const shimScript = [
             "#!/bin/bash",
+            `for arg in "$@"; do`,
+            `  if [ "$arg" = "--output-format" ]; then`,
+            `    exec ${JSON.stringify(realClaudePath)} "$@"`,
+            `  fi`,
+            `done`,
             `REAL_CLAUDE_PATH=${JSON.stringify(realClaudePath)} exec ${JSON.stringify(tsxPath)} ${
               JSON.stringify(shimMainTs)
             } "$@"`
