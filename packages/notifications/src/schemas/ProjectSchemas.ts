@@ -11,7 +11,7 @@ import { Schema } from "effect"
 export class LalphProject extends Schema.Class<LalphProject>("LalphProject")({
   id: Schema.String,
   enabled: Schema.Boolean,
-  targetBranch: Schema.OptionFromNullOr(Schema.String),
+  targetBranch: Schema.Option(Schema.String),
   concurrency: Schema.Int.pipe(Schema.positive()),
   gitFlow: Schema.Literal("pr", "commit"),
   reviewAgent: Schema.Boolean

@@ -1,19 +1,21 @@
 /**
- * Service for uploading spec HTML files to a hosting backend.
+ * Service for uploading plan overview files to a hosting backend.
  * Two implementations: GitHub Gist and Telegraph (default).
  * @since 1.0.0
  */
 import { HttpClient, HttpClientRequest } from "@effect/platform"
 import { Context, Data, Effect, Layer, Schema } from "effect"
 import * as Crypto from "node:crypto"
-import { toTelegraphHtml } from "../lib/TelegraphHtml.js"
+import type { SpecFile } from "../lib/SpecHtmlGenerator.js"
+import { generateSpecHtml } from "../lib/SpecHtmlGenerator.js"
+import { toTelegraphContent } from "../lib/TelegraphHtml.js"
 import { OctokitClient } from "./OctokitClient.js"
 
 /**
  * @since 1.0.0
  * @category errors
  */
-export class SpecUploaderError extends Data.TaggedError("SpecUploaderError")<{
+export class PlanOverviewUploaderError extends Data.TaggedError("PlanOverviewUploaderError")<{
   message: string
   cause: unknown
 }> {}
@@ -22,36 +24,43 @@ export class SpecUploaderError extends Data.TaggedError("SpecUploaderError")<{
  * @since 1.0.0
  * @category services
  */
-export interface SpecUploaderService {
-  readonly upload: (html: string, description: string) => Effect.Effect<{ readonly url: string }, SpecUploaderError>
+export interface PlanOverviewUploaderService {
+  readonly upload: (params: {
+    readonly files: ReadonlyArray<SpecFile>
+    readonly description: string
+  }) => Effect.Effect<{ readonly url: string }, PlanOverviewUploaderError>
 }
 
 /**
  * @since 1.0.0
  * @category context
  */
-export class SpecUploader extends Context.Tag("SpecUploader")<SpecUploader, SpecUploaderService>() {}
+export class PlanOverviewUploader extends Context.Tag("PlanOverviewUploader")<
+  PlanOverviewUploader,
+  PlanOverviewUploaderService
+>() {}
 
 /**
  * GitHub Gist implementation — wraps existing OctokitClient.createGist.
  * @since 1.0.0
  * @category layers
  */
-export const GistSpecUploaderLive = Layer.effect(
-  SpecUploader,
+export const GistPlanOverviewUploaderLive = Layer.effect(
+  PlanOverviewUploader,
   Effect.gen(function*() {
     const octokitClient = yield* OctokitClient
 
-    return SpecUploader.of({
-      upload: (html, description) =>
+    return PlanOverviewUploader.of({
+      upload: ({ description, files }) =>
         Effect.gen(function*() {
+          const html = generateSpecHtml(files)
           const gist = yield* octokitClient.createGist({
             description,
             files: { "spec.html": { content: html } },
             isPublic: false
           }).pipe(
             Effect.mapError((err) =>
-              new SpecUploaderError({
+              new PlanOverviewUploaderError({
                 message: `Gist upload failed: ${err.message}`,
                 cause: err
               })
@@ -84,8 +93,8 @@ const TelegraphResponse = Schema.Union(TelegraphSuccess, TelegraphError)
  * @since 1.0.0
  * @category layers
  */
-export const TelegraphSpecUploaderLive = Layer.effect(
-  SpecUploader,
+export const TelegraphPlanOverviewUploaderLive = Layer.effect(
+  PlanOverviewUploader,
   Effect.gen(function*() {
     const client = yield* HttpClient.HttpClient
 
@@ -101,16 +110,16 @@ export const TelegraphSpecUploaderLive = Layer.effect(
           parsed.ok
             ? Effect.succeed(parsed.result)
             : Effect.fail(
-              new SpecUploaderError({
+              new PlanOverviewUploaderError({
                 message: `Telegraph ${label} failed: ${parsed.error}`,
                 cause: null
               })
             )
         ),
         Effect.mapError((err) =>
-          err instanceof SpecUploaderError
+          err instanceof PlanOverviewUploaderError
             ? err
-            : new SpecUploaderError({
+            : new PlanOverviewUploaderError({
               message: `Telegraph ${label} request failed: ${String(err)}`,
               cause: err
             })
@@ -126,10 +135,11 @@ export const TelegraphSpecUploaderLive = Layer.effect(
 
     const accessToken = String(accountResult.access_token)
 
-    return SpecUploader.of({
-      upload: (html, description) =>
+    return PlanOverviewUploader.of({
+      upload: ({ description, files }) =>
         Effect.gen(function*() {
-          const telegraphHtml = toTelegraphHtml(html)
+          const html = generateSpecHtml(files)
+          const content = toTelegraphContent(html)
           const title = Crypto.randomUUID()
 
           const pageResult = yield* telegraphPost(
@@ -138,7 +148,7 @@ export const TelegraphSpecUploaderLive = Layer.effect(
               access_token: accessToken,
               title,
               author_name: "lalph",
-              content: telegraphHtml,
+              content,
               return_content: false
             },
             "createPage"

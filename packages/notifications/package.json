@@ -27,14 +27,16 @@
     "coverage": "vitest --coverage"
   },
   "dependencies": {
-    "effect": "latest",
+    "@effect/cli": "latest",
+    "@effect/experimental": "^0.58.0",
     "@effect/platform": "latest",
     "@effect/platform-node": "latest",
-    "@effect/cli": "latest",
     "@linear/sdk": "latest",
+    "@template/claude-shim": "workspace:*",
+    "better-telegraph": "^2.1.1",
+    "effect": "latest",
     "octokit": "latest",
-    "telegraf": "latest",
-    "@template/claude-shim": "workspace:*"
+    "telegraf": "latest"
   },
   "effect": {
     "generateExports": {

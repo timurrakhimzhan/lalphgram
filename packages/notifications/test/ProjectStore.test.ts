@@ -50,9 +50,30 @@ describe("ProjectStore", () => {
       // Arrange
       const testDir = makeTestDir()
       yield* writeProjectsFile(testDir, [
-        { id: "proj-a", enabled: true, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false },
-        { id: "proj-b", enabled: false, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false },
-        { id: "proj-c", enabled: true, targetBranch: "main", concurrency: 2, gitFlow: "commit", reviewAgent: true }
+        {
+          id: "proj-a",
+          enabled: true,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        },
+        {
+          id: "proj-b",
+          enabled: false,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        },
+        {
+          id: "proj-c",
+          enabled: true,
+          targetBranch: { _tag: "Some", value: "main" },
+          concurrency: 2,
+          gitFlow: "commit",
+          reviewAgent: true
+        }
       ])
       const testLayer = makeTestLayer(testDir)
 
@@ -74,8 +95,22 @@ describe("ProjectStore", () => {
       // Arrange
       const testDir = makeTestDir()
       yield* writeProjectsFile(testDir, [
-        { id: "proj-a", enabled: true, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false },
-        { id: "proj-b", enabled: true, targetBranch: "develop", concurrency: 3, gitFlow: "commit", reviewAgent: true }
+        {
+          id: "proj-a",
+          enabled: true,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        },
+        {
+          id: "proj-b",
+          enabled: true,
+          targetBranch: { _tag: "Some", value: "develop" },
+          concurrency: 3,
+          gitFlow: "commit",
+          reviewAgent: true
+        }
       ])
       const testLayer = makeTestLayer(testDir)
 
@@ -99,7 +134,14 @@ describe("ProjectStore", () => {
       // Arrange
       const testDir = makeTestDir()
       yield* writeProjectsFile(testDir, [
-        { id: "proj-a", enabled: true, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false }
+        {
+          id: "proj-a",
+          enabled: true,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        }
       ])
       const testLayer = makeTestLayer(testDir)
 
@@ -119,7 +161,14 @@ describe("ProjectStore", () => {
       // Arrange
       const testDir = makeTestDir()
       yield* writeProjectsFile(testDir, [
-        { id: "proj-a", enabled: true, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false }
+        {
+          id: "proj-a",
+          enabled: true,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        }
       ])
       const testLayer = makeTestLayer(testDir)
 
@@ -181,8 +230,22 @@ describe("ProjectStore", () => {
       // Arrange
       const testDir = makeTestDir()
       yield* writeProjectsFile(testDir, [
-        { id: "proj-a", enabled: true, targetBranch: "main", concurrency: 1, gitFlow: "pr", reviewAgent: false },
-        { id: "proj-b", enabled: true, targetBranch: null, concurrency: 1, gitFlow: "pr", reviewAgent: false }
+        {
+          id: "proj-a",
+          enabled: true,
+          targetBranch: { _tag: "Some", value: "main" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        },
+        {
+          id: "proj-b",
+          enabled: true,
+          targetBranch: { _tag: "None" },
+          concurrency: 1,
+          gitFlow: "pr",
+          reviewAgent: false
+        }
       ])
       const testLayer = makeTestLayer(testDir)
 

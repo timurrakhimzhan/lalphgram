@@ -1,8 +1,10 @@
 /**
- * Transforms HTML from generateSpecHtml into Telegraph-compatible HTML.
+ * Transforms HTML from generateSpecHtml into Telegraph-compatible Node array.
  * Replaces Mermaid diagram blocks with pre-rendered PlantUML images via kroki.io.
+ * Uses better-telegraph's parseHtml for HTML → Telegraph Node conversion.
  * @since 1.0.0
  */
+import { parseHtml } from "better-telegraph"
 import { deflateSync } from "node:zlib"
 import { mermaidToPlantUml } from "./MermaidToPlantUml.js"
 
@@ -35,15 +37,15 @@ const mermaidToKrokiUrl = (mermaidContent: string): string => {
 }
 
 /**
- * Transform HTML produced by `generateSpecHtml` into Telegraph-compatible HTML.
+ * Transform HTML produced by `generateSpecHtml` into Telegraph-compatible content.
  *
  * - Extracts `<body>` content (strips doctype, head, scripts, styles)
  * - Replaces `<pre class="mermaid">content</pre>` with `<img src="kroki_url">`
- * - Replaces `<h1>`, `<h2>` → `<h3>` (Telegraph only supports h3/h4)
- * - Replaces `<h5>`, `<h6>` → `<h4>`
+ * - Parses via `better-telegraph`'s `parseHtml` which handles heading downgrades
+ *   and converts to Telegraph's Node format
  * @since 1.0.0
  */
-export const toTelegraphHtml = (html: string): string => {
+export const toTelegraphContent = (html: string): ReadonlyArray<unknown> => {
   // Extract body content
   const bodyMatch = /<body>([\s\S]*)<\/body>/i.exec(html)
   let content = bodyMatch?.[1] ?? html
@@ -64,13 +66,7 @@ export const toTelegraphHtml = (html: string): string => {
     }
   )
 
-  // Downgrade headings for Telegraph compatibility
-  // h1, h2 → h3
-  content = content.replace(/<h[12]>/gi, "<h3>")
-  content = content.replace(/<\/h[12]>/gi, "</h3>")
-  // h5, h6 → h4
-  content = content.replace(/<h[56]>/gi, "<h4>")
-  content = content.replace(/<\/h[56]>/gi, "</h4>")
-
-  return content.trim()
+  const parsed = parseHtml(content)
+  if (parsed == null) return []
+  return typeof parsed === "string" ? [parsed] : parsed
 }

@@ -22,10 +22,10 @@ import {
   APPROVE_BUTTON_LABEL,
   BUFFER_BUTTON_LABEL,
   BUG_BUTTON_LABEL,
+  DISCARD_BUTTON_LABEL,
   FEATURE_BUTTON_LABEL,
   INTERRUPT_BUTTON_LABEL,
   NEW_PROJECT_BUTTON_LABEL,
-  OMIT_BUTTON_LABEL,
   OTHER_BUTTON_LABEL,
   PLAN_BUTTON_LABEL,
   REFACTOR_BUTTON_LABEL,
@@ -39,6 +39,7 @@ import {
 } from "../src/services/MessengerAdapter/MessengerAdapter.js"
 import { OctokitClient } from "../src/services/OctokitClient.js"
 import type { OctokitClientService } from "../src/services/OctokitClient.js"
+import { PlanOverviewUploader, PlanOverviewUploaderError } from "../src/services/PlanOverviewUploader.js"
 import type { PlanEvent } from "../src/services/PlanSession.js"
 import {
   PlanAnalysisReady,
@@ -50,7 +51,6 @@ import {
 } from "../src/services/PlanSession.js"
 import { ProjectStore } from "../src/services/ProjectStore.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
-import { SpecUploader, SpecUploaderError } from "../src/services/SpecUploader.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
 
@@ -230,8 +230,8 @@ const makeProjectStoreMock = (overrides?: {
     )
   })
 
-const makeSpecUploaderMock = () =>
-  SpecUploader.of({
+const makePlanOverviewUploaderMock = () =>
+  PlanOverviewUploader.of({
     upload: vi.fn(() => Effect.succeed({ url: "https://telegra.ph/test-spec" }))
   })
 
@@ -245,7 +245,7 @@ const makeTestLayer = (
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
     octokitClientMock?: ReturnType<typeof makeOctokitClientMock>
     projectStoreMock?: ReturnType<typeof makeProjectStoreMock>
-    specUploaderMock?: ReturnType<typeof makeSpecUploaderMock>
+    planOverviewUploaderMock?: ReturnType<typeof makePlanOverviewUploaderMock>
     taskEvents?: ReadonlyArray<TaskTrackerEvent>
     autoMergeEvents?: ReadonlyArray<AutoMergeEvent>
   } = {}
@@ -266,7 +266,7 @@ const makeTestLayer = (
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
   const octokitClientMock = overrides.octokitClientMock ?? makeOctokitClientMock()
   const projectStoreMock = overrides.projectStoreMock ?? makeProjectStoreMock()
-  const specUploaderMock = overrides.specUploaderMock ?? makeSpecUploaderMock()
+  const planOverviewUploaderMock = overrides.planOverviewUploaderMock ?? makePlanOverviewUploaderMock()
 
   return {
     layer: Layer.mergeAll(
@@ -280,7 +280,7 @@ const makeTestLayer = (
       Layer.succeed(ProjectStore, projectStoreMock),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
       Layer.succeed(OctokitClient, octokitClientMock),
-      Layer.succeed(SpecUploader, specUploaderMock),
+      Layer.succeed(PlanOverviewUploader, planOverviewUploaderMock),
       BranchParserLive
     ),
     messengerMock,
@@ -290,7 +290,7 @@ const makeTestLayer = (
     planSessionMock,
     octokitClientMock,
     projectStoreMock,
-    specUploaderMock
+    planOverviewUploaderMock
   }
 }
 
@@ -711,33 +711,38 @@ describe("plan spec approval", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.effect("shows Approve when spec + analysis + idle are all met", () => {
-    // Arrange — all three conditions
-    const planSessionMock = PlanSession.of({
-      start: vi.fn(() => Effect.succeed(undefined)),
-      answer: vi.fn(() => Effect.succeed(undefined)),
-      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
-      interrupt: vi.fn(() => Effect.succeed(undefined)),
-      approve: Effect.succeed(undefined),
-      reject: Effect.succeed(undefined),
-      isActive: Effect.succeed(false),
-      isIdle: Effect.succeed(false),
-      readFeatureAnalysis: readFailure,
-      readBugAnalysis: readFailure,
-      readRefactorAnalysis: readFailure,
-      readDefaultAnalysis: readFailure,
-      events: Stream.make(
+  it.effect("shows Approve when spec + analysis + idle are all met", () =>
+    Effect.gen(function*() {
+      // Arrange — all three conditions, plan events queued after setup
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: readFailure,
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offerAll(planEventQueue, [
         new PlanSpecCreated({ filePath: ".specs/feature.md" }),
         new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
         new PlanAwaitingInput({})
-      )
-    })
-    const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
-
-    // Act
-    return Effect.gen(function*() {
-      yield* Effect.fork(runEventLoop)
+      ])
       yield* flush
 
       // Assert
@@ -747,8 +752,7 @@ describe("plan spec approval", () => {
           replyKeyboard: [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
         })
       )
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 
   it.effect("calls approve on plan session when Approve button is tapped", () =>
     Effect.gen(function*() {
@@ -792,7 +796,7 @@ describe("plan spec approval", () => {
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const specUploaderMock = makeSpecUploaderMock()
+      const planOverviewUploaderMock = makePlanOverviewUploaderMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -815,7 +819,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, planOverviewUploaderMock })
 
       // Act — process setup messages first, then fire plan events
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -828,10 +832,10 @@ describe("plan spec approval", () => {
       yield* flush
 
       // Assert — upload called and URL sent
-      expect(specUploaderMock.upload).toHaveBeenCalledWith(
-        expect.stringContaining("<!DOCTYPE html>"),
-        "Spec: Feature"
-      )
+      expect(planOverviewUploaderMock.upload).toHaveBeenCalledWith({
+        files: expect.arrayContaining([expect.objectContaining({ name: "analysis.md" })]),
+        description: "Spec: Feature"
+      })
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.stringContaining("telegra.ph")
       )
@@ -852,7 +856,7 @@ describe("plan spec approval", () => {
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const specUploaderMock = makeSpecUploaderMock()
+      const planOverviewUploaderMock = makePlanOverviewUploaderMock()
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
         answer: vi.fn(() => Effect.succeed(undefined)),
@@ -875,7 +879,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, planOverviewUploaderMock })
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -888,18 +892,18 @@ describe("plan spec approval", () => {
       yield* flush
 
       // Assert — uploaded HTML contains mermaid pre tag
-      expect(specUploaderMock.upload).toHaveBeenCalledWith(
-        expect.stringContaining("<pre class=\"mermaid\">"),
-        expect.any(String)
-      )
+      expect(planOverviewUploaderMock.upload).toHaveBeenCalledWith({
+        files: expect.arrayContaining([expect.objectContaining({ name: "services.mmd", mermaid: true })]),
+        description: expect.any(String)
+      })
     }))
 
   it.effect("falls back to raw text when upload fails", () =>
     Effect.gen(function*() {
       // Arrange
       const planEventQueue = yield* Queue.unbounded<PlanEvent>()
-      const specUploaderMock = SpecUploader.of({
-        upload: vi.fn(() => Effect.fail(new SpecUploaderError({ message: "API error", cause: null })))
+      const planOverviewUploaderMock = PlanOverviewUploader.of({
+        upload: vi.fn(() => Effect.fail(new PlanOverviewUploaderError({ message: "API error", cause: null })))
       })
       const planSessionMock = PlanSession.of({
         start: vi.fn(() => Effect.succeed(undefined)),
@@ -923,7 +927,7 @@ describe("plan spec approval", () => {
       const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
-      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, specUploaderMock })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, planOverviewUploaderMock })
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
@@ -950,33 +954,38 @@ describe("plan spec approval", () => {
       )
     }))
 
-  it.effect("shows Approve even when read fails", () => {
-    // Arrange — all read methods fail
-    const planSessionMock = PlanSession.of({
-      start: vi.fn(() => Effect.succeed(undefined)),
-      answer: vi.fn(() => Effect.succeed(undefined)),
-      sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
-      interrupt: vi.fn(() => Effect.succeed(undefined)),
-      approve: Effect.succeed(undefined),
-      reject: Effect.succeed(undefined),
-      isActive: Effect.succeed(false),
-      isIdle: Effect.succeed(false),
-      readFeatureAnalysis: readFailure,
-      readBugAnalysis: readFailure,
-      readRefactorAnalysis: readFailure,
-      readDefaultAnalysis: readFailure,
-      events: Stream.make(
+  it.effect("shows Approve even when read fails", () =>
+    Effect.gen(function*() {
+      // Arrange — all read methods fail, plan events queued after setup
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: vi.fn(() => Effect.succeed(undefined)),
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: readFailure,
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offerAll(planEventQueue, [
         new PlanSpecCreated({ filePath: ".specs/feature.md" }),
         new PlanAnalysisReady({ filePath: ".specs/analysis.md" }),
         new PlanAwaitingInput({})
-      )
-    })
-    const messengerMock = makeMessengerMock()
-    const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
-
-    // Act
-    return Effect.gen(function*() {
-      yield* Effect.fork(runEventLoop)
+      ])
       yield* flush
 
       // Assert — Approve keyboard still shown, no file headers sent
@@ -989,8 +998,7 @@ describe("plan spec approval", () => {
       expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
         expect.stringContaining("<b>analysis.md</b>")
       )
-    }).pipe(Effect.provide(layer))
-  })
+    }))
 })
 
 describe("follow-up buffer vs interrupt choice", () => {
@@ -1018,8 +1026,7 @@ describe("follow-up buffer vs interrupt choice", () => {
           options: [
             { label: BUFFER_BUTTON_LABEL },
             { label: INTERRUPT_BUTTON_LABEL },
-            { label: OMIT_BUTTON_LABEL },
-            { label: ABORT_BUTTON_LABEL }
+            { label: DISCARD_BUTTON_LABEL }
           ]
         })
       )
@@ -1056,7 +1063,7 @@ describe("follow-up buffer vs interrupt choice", () => {
     const incomingStream = Stream.fromIterable([
       ...planSetupMessages,
       new IncomingMessage({ chatId: "1", text: "Also add tests", from: "user" }),
-      new IncomingMessage({ chatId: "1", text: OMIT_BUTTON_LABEL, from: "user" })
+      new IncomingMessage({ chatId: "1", text: DISCARD_BUTTON_LABEL, from: "user" })
     ])
     const messengerMock = makeMessengerMock(incomingStream)
     const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
@@ -1251,6 +1258,7 @@ describe("my own answer flow", () => {
   const makeQuestionPlanSession = (overrides?: {
     answerFn?: ReturnType<typeof vi.fn>
     rejectFn?: ReturnType<typeof vi.fn>
+    events?: Stream.Stream<PlanEvent>
   }) => {
     const answerFn = overrides?.answerFn ?? vi.fn(() => Effect.succeed(undefined))
     const rejectFn = overrides?.rejectFn ?? vi.fn(() => Effect.succeed(undefined))
@@ -1267,7 +1275,7 @@ describe("my own answer flow", () => {
       readBugAnalysis: readFailure,
       readRefactorAnalysis: readFailure,
       readDefaultAnalysis: readFailure,
-      events: Stream.make(questionEvent)
+      events: overrides?.events ?? Stream.make(questionEvent)
     })
   }
 
@@ -1275,14 +1283,17 @@ describe("my own answer flow", () => {
     Effect.gen(function*() {
       // Arrange
       const answerFn = vi.fn(() => Effect.succeed(undefined))
-      const planSessionMock = makeQuestionPlanSession({ answerFn })
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ answerFn, events: Stream.fromQueue(planEventQueue) })
       const queue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
       const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-      // Act — fork so the daemon processes planSetupMessages + PlanQuestion before Custom answer
+      // Act — fork, process setup, then send plan question event
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
       yield* flush
@@ -1303,7 +1314,8 @@ describe("my own answer flow", () => {
     Effect.gen(function*() {
       // Arrange
       const rejectFn = vi.fn(() => Effect.succeed(undefined))
-      const planSessionMock = makeQuestionPlanSession({ rejectFn })
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ rejectFn, events: Stream.fromQueue(planEventQueue) })
       const queue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
@@ -1311,6 +1323,8 @@ describe("my own answer flow", () => {
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
       yield* flush
@@ -1333,7 +1347,8 @@ describe("my own answer flow", () => {
     Effect.gen(function*() {
       // Arrange
       const answerFn = vi.fn(() => Effect.succeed(undefined))
-      const planSessionMock = makeQuestionPlanSession({ answerFn })
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ answerFn, events: Stream.fromQueue(planEventQueue) })
       const queue = yield* Queue.unbounded<IncomingMessage>()
       yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
       const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
@@ -1341,6 +1356,8 @@ describe("my own answer flow", () => {
 
       // Act
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
       yield* flush
@@ -1368,12 +1385,17 @@ describe("my own answer flow", () => {
   it.effect("appends Custom answer button to question options", () =>
     Effect.gen(function*() {
       // Arrange
-      const planSessionMock = makeQuestionPlanSession()
-      const messengerMock = makeMessengerMock()
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ events: Stream.fromQueue(planEventQueue) })
+      const incomingQueue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(incomingQueue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(incomingQueue))
       const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
 
-      // Act — fork so the daemon processes the PlanQuestion event
+      // Act — process setup messages first, then send plan question
       yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
       yield* flush
 
       // Assert — question rendered with "Custom answer" appended
@@ -1386,6 +1408,55 @@ describe("my own answer flow", () => {
           ]
         })
       )
+    }))
+
+  it.effect("batches multiple question answers and sends them together", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const multiQuestionEvent = new PlanQuestion({
+        questions: [
+          { question: "Which DB?", header: "Database", options: [{ label: "Postgres" }, { label: "SQLite" }] },
+          { question: "Which framework?", header: "Framework", options: [{ label: "Express" }, { label: "Fastify" }] }
+        ]
+      })
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = PlanSession.of({
+        start: vi.fn(() => Effect.succeed(undefined)),
+        answer: answerFn,
+        sendFollowUp: vi.fn(() => Effect.succeed(undefined)),
+        interrupt: vi.fn(() => Effect.succeed(undefined)),
+        approve: Effect.succeed(undefined),
+        reject: Effect.succeed(undefined),
+        isActive: Effect.succeed(false),
+        isIdle: Effect.succeed(false),
+        readFeatureAnalysis: readFailure,
+        readBugAnalysis: readFailure,
+        readRefactorAnalysis: readFailure,
+        readDefaultAnalysis: readFailure,
+        events: Stream.fromQueue(planEventQueue)
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act — process setup, then send question event, then answer
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, multiQuestionEvent)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Postgres", from: "user" }))
+      yield* flush
+      // After first answer, planSession.answer should NOT have been called yet
+      expect(answerFn).not.toHaveBeenCalled()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Fastify", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert — answer called once with combined text
+      expect(answerFn).toHaveBeenCalledTimes(1)
+      expect(answerFn).toHaveBeenCalledWith("Postgres\nFastify")
     }))
 })
 

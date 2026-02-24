@@ -2,27 +2,54 @@
  * Event loop and layer construction for the notification service
  * @since 1.0.0
  */
-import { Console, Data, Effect, Layer, Match, Option, Ref, Stream } from "effect"
+import * as Machine from "@effect/experimental/Machine"
+import { Console, Effect, Layer, Match, Option, Stream } from "effect"
 import type { AppEvent } from "../Events.js"
-import { getAnalysisPrompt } from "../lib/AnalysisPrompts.js"
 import { BranchParser, BranchParserLive } from "../lib/BranchParser.js"
-import { generateSpecHtml } from "../lib/SpecHtmlGenerator.js"
-import { markdownToTelegramHtml, splitMessage } from "../lib/TelegramFormatter.js"
 import { GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { AutoMerge, AutoMergeLive } from "./AutoMerge.js"
+import {
+  chatMachine,
+  IDLE_KEYBOARD,
+  PlanAnalysisReadyReq,
+  PlanAwaitingInputReq,
+  PlanCompletedReq,
+  PlanFailedReq,
+  PlanQuestionReceived,
+  PlanSpecCreatedReq,
+  PlanSpecUpdatedReq,
+  PlanTextOutput,
+  UserMessage
+} from "./ChatMachine.js"
 import { CommentTimer, CommentTimerLive } from "./CommentTimer.js"
 import { GitHubClient, GitHubClientLive } from "./GitHubClient.js"
 import { LalphConfig, LalphConfigLive } from "./LalphConfig.js"
-import { MessengerAdapter, type OutgoingMessage } from "./MessengerAdapter/MessengerAdapter.js"
+import { MessengerAdapter } from "./MessengerAdapter/MessengerAdapter.js"
 import { TelegramAdapterLive } from "./MessengerAdapter/TelegramAdapter.js"
 import { OctokitClientLive } from "./OctokitClient.js"
+import { PlanOverviewUploaderMap } from "./PlanOverviewUploaderMap.js"
 import { PlanSession, PlanSessionLive } from "./PlanSession.js"
-import { ProjectStore, ProjectStoreLive } from "./ProjectStore.js"
+import { ProjectStoreLive } from "./ProjectStore.js"
 import { PullRequestTracker, PullRequestTrackerLive } from "./PullRequestTracker.js"
-import { SpecUploader } from "./SpecUploader.js"
-import { SpecUploaderMap } from "./SpecUploaderMap.js"
 import { TaskTracker } from "./TaskTracker/TaskTracker.js"
 import { TrackerLayerMap } from "./TrackerLayerMap.js"
+
+// Re-export button labels from ChatMachine for backwards compatibility
+export {
+  ABORT_BUTTON_LABEL,
+  APPROVE_BUTTON_LABEL,
+  BUFFER_BUTTON_LABEL,
+  BUG_BUTTON_LABEL,
+  DISCARD_BUTTON_LABEL,
+  FEATURE_BUTTON_LABEL,
+  INTERRUPT_BUTTON_LABEL,
+  NEW_PROJECT_BUTTON_LABEL,
+  OTHER_BUTTON_LABEL,
+  PLAN_BUTTON_LABEL,
+  REFACTOR_BUTTON_LABEL
+} from "./ChatMachine.js"
+
+// ── Layer composition (unchanged) ────────────────────────────────
 
 const lalphConfigLayer = LalphConfigLive
 
@@ -78,17 +105,17 @@ const planSessionLayer = PlanSessionLive.pipe(
 
 const projectStoreLayer = ProjectStoreLive
 
-const specUploaderMapLayer = SpecUploaderMap.Default.pipe(
+const planOverviewUploaderMapLayer = PlanOverviewUploaderMap.Default.pipe(
   Layer.provide(octokitLayer)
 )
 
-const specUploaderLayer = Layer.unwrapEffect(
+const planOverviewUploaderLayer = Layer.unwrapEffect(
   Effect.gen(function*() {
     const config = yield* LalphConfig
-    return SpecUploaderMap.get(config.specUploader)
+    return PlanOverviewUploaderMap.get(config.specUploader)
   })
 ).pipe(
-  Layer.provide(specUploaderMapLayer),
+  Layer.provide(planOverviewUploaderMapLayer),
   Layer.provide(lalphConfigLayer)
 )
 
@@ -108,76 +135,17 @@ export const MainLayer = Layer.mergeAll(
   planSessionLayer,
   octokitLayer,
   projectStoreLayer,
-  specUploaderLayer
+  planOverviewUploaderLayer
 )
 
+// ── Event loop ───────────────────────────────────────────────────
+
 /**
- * The main event loop that merges all event streams and dispatches events
+ * The main event loop that boots the chat state machine, bridges streams,
+ * and dispatches external events (PR/task notifications).
  * @since 1.0.0
  * @category event-loop
  */
-export const PLAN_BUTTON_LABEL = "Plan"
-const DONE_BUTTON_LABEL = "Done"
-export const FEATURE_BUTTON_LABEL = "Feature"
-export const BUG_BUTTON_LABEL = "Bug"
-export const REFACTOR_BUTTON_LABEL = "Refactor"
-export const OTHER_BUTTON_LABEL = "Other"
-
-const PLAN_TYPE_LABELS = [
-  FEATURE_BUTTON_LABEL,
-  BUG_BUTTON_LABEL,
-  REFACTOR_BUTTON_LABEL,
-  OTHER_BUTTON_LABEL
-]
-export const APPROVE_BUTTON_LABEL = "Approve"
-export const BUFFER_BUTTON_LABEL = "Buffer"
-export const INTERRUPT_BUTTON_LABEL = "Interrupt"
-export const OMIT_BUTTON_LABEL = "Omit"
-export const ABORT_BUTTON_LABEL = "Abort"
-const MY_ANSWER_BUTTON_LABEL = "Custom answer"
-const BACK_BUTTON_LABEL = "Back"
-export const NEW_PROJECT_BUTTON_LABEL = "New project"
-
-type CreatingProjectStep = "Name" | "Concurrency" | "TargetBranch" | "GitFlow" | "ReviewAgent"
-
-interface CreatingProjectData {
-  readonly name?: string
-  readonly concurrency?: number
-  readonly targetBranch?: string | null
-  readonly gitFlow?: "pr" | "commit"
-  readonly reviewAgent?: boolean
-}
-
-type ChatState =
-  | { readonly _tag: "Idle" }
-  | { readonly _tag: "SelectingProject" }
-  | { readonly _tag: "SelectingPlanType"; readonly projectId: string }
-  | {
-    readonly _tag: "CollectingPlan"
-    readonly projectId: string
-    readonly planType: string
-    readonly buffer: ReadonlyArray<string>
-  }
-  | { readonly _tag: "SessionRunning"; readonly projectId: string; readonly planType: string }
-  | {
-    readonly _tag: "AwaitingFollowUpDecision"
-    readonly projectId: string
-    readonly planType: string
-    readonly message: string
-  }
-  | { readonly _tag: "SpecReady"; readonly projectId: string; readonly planType: string }
-  | {
-    readonly _tag: "CreatingProject"
-    readonly step: CreatingProjectStep
-    readonly data: CreatingProjectData
-    readonly continueWithPlan: boolean
-  }
-
-const IDLE_KEYBOARD = [{ label: PLAN_BUTTON_LABEL }, { label: NEW_PROJECT_BUTTON_LABEL }]
-const COLLECTING_KEYBOARD = [{ label: DONE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
-const SESSION_KEYBOARD = [{ label: ABORT_BUTTON_LABEL }]
-const SPEC_READY_KEYBOARD = [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUTTON_LABEL }]
-
 export const runEventLoop = Effect.gen(function*() {
   const pullRequestTracker = yield* PullRequestTracker
   const autoMerge = yield* AutoMerge
@@ -187,83 +155,11 @@ export const runEventLoop = Effect.gen(function*() {
   const taskTracker = yield* TaskTracker
   const branchParser = yield* BranchParser
   const planSession = yield* PlanSession
-  const specUploader = yield* SpecUploader
-  const projectStore = yield* ProjectStore
 
-  const state = yield* Ref.make<ChatState>({ _tag: "Idle" })
-  const pendingAnswerCount = yield* Ref.make(0)
-  const pendingOptionLabels = yield* Ref.make<ReadonlySet<string>>(new Set())
-  const analysisFollowUpSent = yield* Ref.make(false)
-  const awaitingFreeTextAnswer = yield* Ref.make(false)
-  const lastQuestionMessage = yield* Ref.make<Option.Option<OutgoingMessage>>(Option.none())
+  // Boot the chat state machine
+  const actor = yield* Machine.boot(chatMachine)
 
-  class ReadyFlags extends Data.Class<{ spec: boolean; analysis: boolean; idle: boolean }> {}
-  const readyFlags = yield* Ref.make(new ReadyFlags({ spec: false, analysis: false, idle: false }))
-
-  const readSpecFiles = (planType: string) =>
-    (
-      planType === "Feature"
-        ? planSession.readFeatureAnalysis.pipe(
-          Effect.map((files) => [
-            { name: "analysis.md", content: files.analysis, mermaid: false },
-            { name: "services.mmd", content: files.services, mermaid: true },
-            { name: "test.md", content: files.test, mermaid: false }
-          ])
-        )
-        : planType === "Bug"
-        ? planSession.readBugAnalysis.pipe(
-          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-        )
-        : planType === "Refactor"
-        ? planSession.readRefactorAnalysis.pipe(
-          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-        )
-        : planSession.readDefaultAnalysis.pipe(
-          Effect.map((files) => [{ name: "analysis.md", content: files.analysis, mermaid: false }])
-        )
-    ).pipe(Effect.option)
-
-  const sendSpecFilesRaw = (files: ReadonlyArray<{ name: string; content: string; mermaid: boolean }>) =>
-    Effect.forEach(files, (file) => {
-      const formatted = file.mermaid
-        ? markdownToTelegramHtml(`\`\`\`mermaid\n${file.content}\n\`\`\``)
-        : markdownToTelegramHtml(file.content)
-      const text = `<b>${file.name}</b>\n${formatted}`
-      return Effect.forEach(splitMessage(text), (chunk) => notifier.sendMessage(chunk))
-    })
-
-  const sendSpecFiles = (planType: string) =>
-    Effect.gen(function*() {
-      const readResult = yield* readSpecFiles(planType)
-
-      if (Option.isSome(readResult)) {
-        const files = readResult.value
-        const html = generateSpecHtml(files)
-        const uploadResult = yield* specUploader.upload(html, `Spec: ${planType}`).pipe(Effect.option)
-
-        if (Option.isSome(uploadResult)) {
-          yield* notifier.sendMessage(`<a href="${uploadResult.value.url}">View spec</a>`)
-        } else {
-          yield* sendSpecFilesRaw(files)
-        }
-      }
-    })
-
-  const showApproveIfReady = Effect.gen(function*() {
-    const flags = yield* Ref.get(readyFlags)
-    if (!flags.spec || !flags.analysis || !flags.idle) return
-    const current = yield* Ref.get(state)
-    const hasProjectId = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
-      current._tag === "SpecReady"
-    const planType = hasProjectId ? current.planType : "Other"
-    const projectId = hasProjectId ? current.projectId : ""
-    yield* Ref.set(state, { _tag: "SpecReady", projectId, planType })
-    yield* sendSpecFiles(planType)
-    yield* notifier.sendMessage({
-      text: "Spec ready. Reply with questions or approve to proceed.",
-      replyKeyboard: SPEC_READY_KEYBOARD
-    })
-  })
+  // ── External event dispatch (unchanged) ──────────────────────
 
   const dispatchEvent = (event: AppEvent) =>
     Match.value(event).pipe(
@@ -347,543 +243,37 @@ export const runEventLoop = Effect.gen(function*() {
       Match.exhaustive
     )
 
-  const rejectSession = planSession.reject.pipe(
-    Effect.tapError((err) => Effect.logError(`Plan abort error: ${err.message}`)),
-    Effect.orElseSucceed(() => undefined)
-  )
+  // ── Stream bridges ───────────────────────────────────────────
 
-  const abortToIdle = (hasSession: boolean) =>
-    Effect.gen(function*() {
-      if (hasSession) {
-        yield* rejectSession
-      }
-      yield* Ref.set(state, { _tag: "Idle" })
-      yield* Ref.set(pendingAnswerCount, 0)
-      yield* Ref.set(pendingOptionLabels, new Set())
-      yield* Ref.set(analysisFollowUpSent, false)
-      yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
-      yield* Ref.set(awaitingFreeTextAnswer, false)
-      yield* Effect.log("Plan aborted")
-      yield* notifier.sendMessage({ text: "Plan aborted.", replyKeyboard: IDLE_KEYBOARD })
-    })
-
-  const showFollowUpChoice = (text: string, projectId: string, planType: string) =>
-    Effect.gen(function*() {
-      yield* Ref.set(state, { _tag: "AwaitingFollowUpDecision", projectId, planType, message: text })
-      yield* Effect.log("Holding follow-up message, showing buffer/interrupt buttons")
-      yield* notifier.sendMessage({
-        text: "Send as follow-up or interrupt Claude?",
-        options: [
-          { label: BUFFER_BUTTON_LABEL },
-          { label: INTERRUPT_BUTTON_LABEL },
-          { label: OMIT_BUTTON_LABEL },
-          { label: ABORT_BUTTON_LABEL }
-        ]
-      })
-    })
-
-  const handleIncomingMessage = (msg: { text: string }) =>
-    Effect.gen(function*() {
-      yield* Effect.log(`Incoming message: ${msg.text}`)
-      const current = yield* Ref.get(state)
-
-      switch (current._tag) {
-        case "Idle": {
-          if (msg.text === PLAN_BUTTON_LABEL) {
-            const projects = yield* projectStore.listProjects.pipe(
-              Effect.orElseSucceed((): ReadonlyArray<{ id: string }> => [])
-            )
-            if (projects.length === 0) {
-              yield* notifier.sendMessage("No projects. Create one first.")
-              return
-            }
-            if (projects.length === 1) {
-              yield* Ref.set(state, { _tag: "SelectingPlanType", projectId: projects[0]!.id })
-              yield* Effect.log("Single project auto-selected").pipe(
-                Effect.annotateLogs("projectId", projects[0]!.id)
-              )
-              yield* notifier.sendMessage({
-                text: "What type of change?",
-                options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
-              })
-              return
-            }
-            yield* Ref.set(state, { _tag: "SelectingProject" })
-            yield* notifier.sendMessage({
-              text: "Select a project:",
-              options: [
-                ...projects.map((p) => ({ label: p.id })),
-                { label: NEW_PROJECT_BUTTON_LABEL },
-                { label: ABORT_BUTTON_LABEL }
-              ]
-            })
-            return
-          }
-          if (msg.text === NEW_PROJECT_BUTTON_LABEL) {
-            yield* Ref.set(state, {
-              _tag: "CreatingProject",
-              step: "Name",
-              data: {},
-              continueWithPlan: false
-            })
-            yield* notifier.sendMessage("Enter project name:")
-            return
-          }
-          return
-        }
-        case "SelectingProject": {
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* Ref.set(state, { _tag: "Idle" })
-            yield* notifier.sendMessage({ text: "Plan aborted.", replyKeyboard: IDLE_KEYBOARD })
-            return
-          }
-          if (msg.text === NEW_PROJECT_BUTTON_LABEL) {
-            yield* Ref.set(state, {
-              _tag: "CreatingProject",
-              step: "Name",
-              data: {},
-              continueWithPlan: true
-            })
-            yield* notifier.sendMessage("Enter project name:")
-            return
-          }
-          // Treat as project selection
-          yield* Ref.set(state, { _tag: "SelectingPlanType", projectId: msg.text })
-          yield* Effect.log("Project selected").pipe(
-            Effect.annotateLogs("projectId", msg.text)
-          )
-          yield* notifier.sendMessage({
-            text: "What type of change?",
-            options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
-          })
-          return
-        }
-        case "SelectingPlanType": {
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* Ref.set(state, { _tag: "Idle" })
-            yield* notifier.sendMessage({ text: "Plan aborted.", replyKeyboard: IDLE_KEYBOARD })
-            return
-          }
-          if (PLAN_TYPE_LABELS.includes(msg.text)) {
-            yield* Ref.set(state, {
-              _tag: "CollectingPlan",
-              projectId: current.projectId,
-              planType: msg.text,
-              buffer: []
-            })
-            yield* Effect.log("Plan type selected, collection started").pipe(
-              Effect.annotateLogs("planType", msg.text)
-            )
-            yield* notifier.sendMessage({
-              text: "Describe what you'd like to plan. Tap <b>Done</b> when ready.",
-              replyKeyboard: COLLECTING_KEYBOARD
-            })
-          }
-          return
-        }
-        case "CollectingPlan": {
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* abortToIdle(false)
-            return
-          }
-          if (msg.text === DONE_BUTTON_LABEL) {
-            const joinedText = current.buffer.join("\n")
-            if (joinedText.trim().length === 0) {
-              yield* Effect.log("Plan collection done with empty buffer")
-              yield* notifier.sendMessage("No plan description provided.")
-              return
-            }
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Ref.set(analysisFollowUpSent, false)
-            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
-            yield* Effect.log("Plan collection done, starting session").pipe(
-              Effect.annotateLogs("planText", joinedText)
-            )
-            const totalProjects = yield* projectStore.listProjects.pipe(
-              Effect.map((ps) => ps.length),
-              Effect.orElseSucceed(() => 1)
-            )
-            yield* planSession.start(joinedText, totalProjects > 1 ? current.projectId : undefined).pipe(
-              Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            yield* notifier.sendMessage({
-              text: "Planning started...",
-              replyKeyboard: SESSION_KEYBOARD
-            })
-            return
-          }
-          yield* Ref.set(state, {
-            _tag: "CollectingPlan",
-            projectId: current.projectId,
-            planType: current.planType,
-            buffer: [...current.buffer, msg.text]
-          })
-          yield* Effect.log("Buffering plan message").pipe(
-            Effect.annotateLogs("bufferedText", msg.text)
-          )
-          yield* notifier.sendMessage("✓ Added. Tap <b>Done</b> when ready.")
-          return
-        }
-        case "SessionRunning": {
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* abortToIdle(true)
-            return
-          }
-          const pending = yield* Ref.get(pendingAnswerCount)
-          const options = yield* Ref.get(pendingOptionLabels)
-          const isAwaitingFreeText = yield* Ref.get(awaitingFreeTextAnswer)
-          if (pending > 0 && options.has(msg.text)) {
-            if (msg.text === MY_ANSWER_BUTTON_LABEL) {
-              yield* Ref.set(awaitingFreeTextAnswer, true)
-              yield* notifier.sendMessage({
-                text: "Type your answer:",
-                options: [{ label: BACK_BUTTON_LABEL }]
-              })
-              return
-            }
-            if (msg.text === BACK_BUTTON_LABEL) {
-              yield* Ref.set(awaitingFreeTextAnswer, false)
-              const lastQ = yield* Ref.get(lastQuestionMessage)
-              if (Option.isSome(lastQ)) {
-                yield* notifier.sendMessage(lastQ.value)
-              }
-              return
-            }
-            yield* Ref.set(awaitingFreeTextAnswer, false)
-            yield* Effect.log("Forwarding answer to plan session")
-            yield* Ref.update(pendingAnswerCount, (n) => n - 1)
-            yield* planSession.answer(msg.text).pipe(
-              Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            const newPending = yield* Ref.get(pendingAnswerCount)
-            if (newPending <= 0) {
-              yield* Ref.set(pendingOptionLabels, new Set())
-            }
-            return
-          }
-          if (isAwaitingFreeText) {
-            yield* Ref.set(awaitingFreeTextAnswer, false)
-            yield* Effect.log("Forwarding free-text answer to plan session")
-            yield* Ref.update(pendingAnswerCount, (n) => n - 1)
-            yield* planSession.answer(msg.text).pipe(
-              Effect.tapError((err) => Effect.logError(`Plan answer error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            const newPending = yield* Ref.get(pendingAnswerCount)
-            if (newPending <= 0) {
-              yield* Ref.set(pendingOptionLabels, new Set())
-            }
-            return
-          }
-          const idle = yield* planSession.isIdle
-          if (idle) {
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            yield* planSession.sendFollowUp(msg.text).pipe(
-              Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
-              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-          } else {
-            yield* showFollowUpChoice(msg.text, current.projectId, current.planType)
-          }
-          return
-        }
-        case "AwaitingFollowUpDecision": {
-          if (msg.text === BUFFER_BUTTON_LABEL) {
-            yield* Effect.log("Buffering follow-up message")
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            yield* planSession.sendFollowUp(current.message).pipe(
-              Effect.tap(() => notifier.sendMessage("Message buffered — Claude will process it shortly.")),
-              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            return
-          }
-          if (msg.text === INTERRUPT_BUTTON_LABEL) {
-            yield* Effect.log("Interrupting Claude with follow-up message")
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            yield* planSession.interrupt(current.message).pipe(
-              Effect.tap(() => notifier.sendMessage("Claude interrupted — processing your message now.")),
-              Effect.tapError((err) => Effect.logError(`Plan interrupt error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            return
-          }
-          if (msg.text === OMIT_BUTTON_LABEL) {
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Effect.log("Follow-up message discarded")
-            yield* notifier.sendMessage("Message discarded.")
-            return
-          }
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* abortToIdle(true)
-            return
-          }
-          return
-        }
-        case "SpecReady": {
-          if (msg.text === APPROVE_BUTTON_LABEL) {
-            yield* Effect.log("User approved task creation")
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            yield* planSession.approve.pipe(
-              Effect.tapError((err) => Effect.logError(`Plan approve error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-            return
-          }
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* abortToIdle(true)
-            return
-          }
-          const idleSpec = yield* planSession.isIdle
-          if (idleSpec) {
-            yield* Ref.set(state, {
-              _tag: "SessionRunning",
-              projectId: current.projectId,
-              planType: current.planType
-            })
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: false }))
-            yield* planSession.sendFollowUp(msg.text).pipe(
-              Effect.tap(() => notifier.sendMessage("Follow-up sent.")),
-              Effect.tapError((err) => Effect.logError(`Plan follow-up error: ${err.message}`)),
-              Effect.orElseSucceed(() => undefined)
-            )
-          } else {
-            yield* showFollowUpChoice(msg.text, current.projectId, current.planType)
-          }
-          return
-        }
-        case "CreatingProject": {
-          if (msg.text === ABORT_BUTTON_LABEL) {
-            yield* Ref.set(state, { _tag: "Idle" })
-            yield* notifier.sendMessage({ text: "Project creation cancelled.", replyKeyboard: IDLE_KEYBOARD })
-            return
-          }
-          switch (current.step) {
-            case "Name": {
-              yield* Ref.set(state, {
-                ...current,
-                step: "Concurrency",
-                data: { ...current.data, name: msg.text }
-              })
-              yield* notifier.sendMessage({
-                text: "Concurrency (tasks in parallel):",
-                options: [
-                  { label: "1" },
-                  { label: "2" },
-                  { label: "3" },
-                  { label: "4" },
-                  { label: ABORT_BUTTON_LABEL }
-                ]
-              })
-              return
-            }
-            case "Concurrency": {
-              const n = Number(msg.text)
-              if (isNaN(n) || n < 1) return
-              yield* Ref.set(state, {
-                ...current,
-                step: "TargetBranch",
-                data: { ...current.data, concurrency: n }
-              })
-              yield* notifier.sendMessage({
-                text: "Target branch (type branch name or skip):",
-                options: [{ label: "Skip" }, { label: ABORT_BUTTON_LABEL }]
-              })
-              return
-            }
-            case "TargetBranch": {
-              const targetBranch = msg.text === "Skip" ? null : msg.text
-              yield* Ref.set(state, {
-                ...current,
-                step: "GitFlow",
-                data: { ...current.data, targetBranch }
-              })
-              yield* notifier.sendMessage({
-                text: "Git flow:",
-                options: [
-                  { label: "PR" },
-                  { label: "Commit" },
-                  { label: ABORT_BUTTON_LABEL }
-                ]
-              })
-              return
-            }
-            case "GitFlow": {
-              const gitFlow = msg.text === "Commit" ? "commit" as const : "pr" as const
-              yield* Ref.set(state, {
-                ...current,
-                step: "ReviewAgent",
-                data: { ...current.data, gitFlow }
-              })
-              yield* notifier.sendMessage({
-                text: "Enable review agent?",
-                options: [
-                  { label: "Yes" },
-                  { label: "No" },
-                  { label: ABORT_BUTTON_LABEL }
-                ]
-              })
-              return
-            }
-            case "ReviewAgent": {
-              const reviewAgent = msg.text === "Yes"
-              const data = current.data
-              yield* projectStore.createProject({
-                id: data.name!,
-                targetBranch: data.targetBranch != null ? Option.some(data.targetBranch) : Option.none(),
-                concurrency: data.concurrency!,
-                gitFlow: data.gitFlow!,
-                reviewAgent
-              }).pipe(
-                Effect.tapError((err) => notifier.sendMessage(`Failed to create project: ${err.message}`)),
-                Effect.orElseSucceed(() => undefined)
-              )
-              yield* notifier.sendMessage(`Project <b>${data.name!}</b> created.`)
-              if (current.continueWithPlan) {
-                yield* Ref.set(state, { _tag: "SelectingPlanType", projectId: data.name! })
-                yield* notifier.sendMessage({
-                  text: "What type of change?",
-                  options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
-                })
-              } else {
-                yield* Ref.set(state, { _tag: "Idle" })
-                yield* notifier.sendMessage({ text: "Ready.", replyKeyboard: IDLE_KEYBOARD })
-              }
-              return
-            }
-          }
-          return
-        }
-      }
-    }).pipe(Effect.annotateLogs("service", "PlanInput"))
-
+  // Telegram messages → UserMessage requests
   const incomingMessageStream = notifier.incomingMessages.pipe(
     Stream.mapEffect((msg) =>
-      handleIncomingMessage(msg).pipe(
+      actor.send(new UserMessage({ text: msg.text })).pipe(
         Effect.catchAll((err) => Effect.logError(`Incoming message error: ${String(err)}`))
       )
     )
   )
 
+  // PlanSession events → Machine requests
   const planEventStream = planSession.events.pipe(
     Stream.mapEffect((event) =>
       Match.value(event).pipe(
-        Match.tag("PlanTextOutput", (e) =>
-          Effect.forEach(splitMessage(markdownToTelegramHtml(e.text)), (chunk) => notifier.sendMessage(chunk))),
-        Match.tag("PlanQuestion", (e) =>
-          Effect.gen(function*() {
-            yield* Ref.update(pendingAnswerCount, (n) =>
-              n + e.questions.length)
-            const labels = e.questions.flatMap((q) => q.options?.map((o) => o.label) ?? [])
-            yield* Ref.update(pendingOptionLabels, (s) =>
-              new Set([...s, ...labels, MY_ANSWER_BUTTON_LABEL, BACK_BUTTON_LABEL]))
-            yield* Effect.forEach(e.questions, (q) => {
-              const formatted = markdownToTelegramHtml(q.question)
-              const header = q.header != null ? `<b>${markdownToTelegramHtml(q.header)}</b>\n` : ""
-              const baseOptions = q.options?.map((o) => ({ label: o.label })) ?? []
-              const msg: OutgoingMessage = {
-                text: `${header}${formatted}`,
-                options: [...baseOptions, { label: MY_ANSWER_BUTTON_LABEL }]
-              }
-              return Ref.set(lastQuestionMessage, Option.some(msg)).pipe(
-                Effect.andThen(notifier.sendMessage(msg))
-              )
-            })
-          })),
-        Match.tag("PlanSpecCreated", () =>
-          Effect.gen(function*() {
-            const current = yield* Ref.get(state)
-            const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
-                current._tag === "SpecReady"
-              ? current.planType
-              : "Other"
-
-            const alreadySent = yield* Ref.getAndSet(analysisFollowUpSent, true)
-            if (!alreadySent) {
-              yield* planSession.sendFollowUp(getAnalysisPrompt(planType)).pipe(
-                Effect.tapError((err) => Effect.logError(`Analysis follow-up error: ${err.message}`)),
-                Effect.orElseSucceed(() => undefined)
-              )
-            }
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, spec: true }))
-            yield* showApproveIfReady
-          })),
-        Match.tag("PlanSpecUpdated", () =>
-          Effect.gen(function*() {
-            const current = yield* Ref.get(state)
-            const planType = current._tag === "SessionRunning" || current._tag === "AwaitingFollowUpDecision" ||
-                current._tag === "SpecReady"
-              ? current.planType
-              : "Other"
-
-            const alreadySent = yield* Ref.getAndSet(analysisFollowUpSent, true)
-            if (!alreadySent) {
-              yield* planSession.sendFollowUp(getAnalysisPrompt(planType)).pipe(
-                Effect.tapError((err) => Effect.logError(`Analysis follow-up error: ${err.message}`)),
-                Effect.orElseSucceed(() => undefined)
-              )
-            }
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, spec: true }))
-            yield* showApproveIfReady
-          })),
-        Match.tag("PlanAnalysisReady", () =>
-          Effect.gen(function*() {
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, analysis: true }))
-            yield* showApproveIfReady
-          })),
-        Match.tag("PlanAwaitingInput", () =>
-          Effect.gen(function*() {
-            yield* Ref.update(readyFlags, (f) => new ReadyFlags({ ...f, idle: true }))
-            yield* showApproveIfReady
-          })),
-        Match.tag("PlanCompleted", () =>
-          Effect.gen(function*() {
-            yield* Ref.set(state, { _tag: "Idle" })
-            yield* Ref.set(analysisFollowUpSent, false)
-            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
-            yield* notifier.sendMessage({ text: "Plan completed.", replyKeyboard: IDLE_KEYBOARD })
-          })),
-        Match.tag("PlanFailed", (e) =>
-          Effect.gen(function*() {
-            yield* Ref.set(state, { _tag: "Idle" })
-            yield* Ref.set(analysisFollowUpSent, false)
-            yield* Ref.set(readyFlags, new ReadyFlags({ spec: false, analysis: false, idle: false }))
-            yield* notifier.sendMessage({ text: `Plan failed: ${e.message}`, replyKeyboard: IDLE_KEYBOARD })
-          })),
+        Match.tag("PlanTextOutput", (e) => actor.send(new PlanTextOutput({ text: e.text }))),
+        Match.tag("PlanQuestion", (e) => actor.send(new PlanQuestionReceived({ questions: e.questions }))),
+        Match.tag("PlanSpecCreated", () => actor.send(new PlanSpecCreatedReq())),
+        Match.tag("PlanSpecUpdated", () => actor.send(new PlanSpecUpdatedReq())),
+        Match.tag("PlanAnalysisReady", () => actor.send(new PlanAnalysisReadyReq())),
+        Match.tag("PlanAwaitingInput", () => actor.send(new PlanAwaitingInputReq())),
+        Match.tag("PlanCompleted", () => actor.send(new PlanCompletedReq())),
+        Match.tag("PlanFailed", (e) => actor.send(new PlanFailedReq({ message: e.message }))),
         Match.exhaustive
       ).pipe(
         Effect.catchAll((err) => Effect.logError(`Plan event relay error: ${String(err)}`))
       )
     )
   )
+
+  // ── External event streams ───────────────────────────────────
 
   const mergedStream = Stream.merge(
     Stream.merge(
@@ -895,7 +285,7 @@ export const runEventLoop = Effect.gen(function*() {
 
   yield* notifier.sendMessage({
     text: "🚀 Notification service started.",
-    replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+    replyKeyboard: IDLE_KEYBOARD
   })
   yield* Console.log("🚀 Notification service started. Press Ctrl+C to stop.")
 
@@ -922,6 +312,10 @@ export const runEventLoop = Effect.gen(function*() {
       )
     ),
     Effect.annotateLogs("service", "EventLoop"),
-    Effect.catchAll((err) => Effect.logError(`Event loop error: ${String(err)}`))
+    Effect.catchAll((err) => Effect.logError(`Event loop error: ${String(err)}`)),
+    Effect.forkDaemon
   )
-})
+
+  // Block until interrupted — keeps the Machine scope alive for daemon fibers
+  yield* Effect.never
+}).pipe(Effect.scoped)

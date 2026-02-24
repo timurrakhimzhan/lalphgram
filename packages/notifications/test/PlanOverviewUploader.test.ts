@@ -2,19 +2,22 @@ import type { HttpClientRequest } from "@effect/platform"
 import { HttpClient, HttpClientResponse } from "@effect/platform"
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import type { SpecFile } from "../src/lib/SpecHtmlGenerator.js"
 import { OctokitClient } from "../src/services/OctokitClient.js"
 import {
-  GistSpecUploaderLive,
-  SpecUploader,
-  SpecUploaderError,
-  TelegraphSpecUploaderLive
-} from "../src/services/SpecUploader.js"
+  GistPlanOverviewUploaderLive,
+  PlanOverviewUploader,
+  PlanOverviewUploaderError,
+  TelegraphPlanOverviewUploaderLive
+} from "../src/services/PlanOverviewUploader.js"
 
-const testHtml = "<!DOCTYPE html><html><body>test</body></html>"
+const testFiles: ReadonlyArray<SpecFile> = [
+  { name: "analysis.md", content: "# Analysis\nSome content", mermaid: false }
+]
 const testDescription = "Spec: Feature"
 
-describe("GistSpecUploaderLive", () => {
-  it.effect("uploads HTML via createGist and returns htmlpreview URL", () => {
+describe("GistPlanOverviewUploaderLive", () => {
+  it.effect("uploads files as HTML via createGist and returns htmlpreview URL", () => {
     // Arrange
     const octokitMock = OctokitClient.of({
       getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test" })),
@@ -51,21 +54,21 @@ describe("GistSpecUploaderLive", () => {
       )
     })
 
-    const testLayer = GistSpecUploaderLive.pipe(
+    const testLayer = GistPlanOverviewUploaderLive.pipe(
       Layer.provide(Layer.succeed(OctokitClient, octokitMock))
     )
 
     // Act & Assert
     return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription)
+      const uploader = yield* PlanOverviewUploader
+      const result = yield* uploader.upload({ files: testFiles, description: testDescription })
 
       expect(result.url).toBe(
         "https://htmlpreview.github.io/?https://gist.githubusercontent.com/raw/spec.html"
       )
       expect(octokitMock.createGist).toHaveBeenCalledWith({
         description: testDescription,
-        files: { "spec.html": { content: testHtml } },
+        files: { "spec.html": { content: expect.stringContaining("<!DOCTYPE html>") } },
         isPublic: false
       })
     }).pipe(Effect.provide(testLayer))
@@ -108,14 +111,14 @@ describe("GistSpecUploaderLive", () => {
       )
     })
 
-    const testLayer = GistSpecUploaderLive.pipe(
+    const testLayer = GistPlanOverviewUploaderLive.pipe(
       Layer.provide(Layer.succeed(OctokitClient, octokitMock))
     )
 
     // Act & Assert
     return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription)
+      const uploader = yield* PlanOverviewUploader
+      const result = yield* uploader.upload({ files: testFiles, description: testDescription })
 
       expect(result.url).toBe("https://htmlpreview.github.io/?https://gist.github.com/gist-456")
     }).pipe(Effect.provide(testLayer))
@@ -149,7 +152,7 @@ const makeTelegraphHttpClient = (
   return { executeSpy, httpLayer }
 }
 
-describe("TelegraphSpecUploaderLive", () => {
+describe("TelegraphPlanOverviewUploaderLive", () => {
   it.effect("creates account on construction and creates page on upload", () => {
     // Arrange
     const { executeSpy, httpLayer } = makeTelegraphHttpClient({
@@ -157,12 +160,12 @@ describe("TelegraphSpecUploaderLive", () => {
       createPage: { ok: true, result: { url: "https://telegra.ph/Test-Page-01-01" } }
     })
 
-    const testLayer = TelegraphSpecUploaderLive.pipe(Layer.provide(httpLayer))
+    const testLayer = TelegraphPlanOverviewUploaderLive.pipe(Layer.provide(httpLayer))
 
     // Act & Assert
     return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription)
+      const uploader = yield* PlanOverviewUploader
+      const result = yield* uploader.upload({ files: testFiles, description: testDescription })
 
       expect(result.url).toBe("https://telegra.ph/Test-Page-01-01")
       expect(executeSpy).toHaveBeenCalledTimes(2)
@@ -171,38 +174,38 @@ describe("TelegraphSpecUploaderLive", () => {
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.effect("fails with SpecUploaderError on Telegraph API error", () => {
+  it.effect("fails with PlanOverviewUploaderError on Telegraph API error", () => {
     // Arrange
     const { httpLayer } = makeTelegraphHttpClient({
       createAccount: { ok: true, result: { access_token: "test-token-123" } },
       createPage: { ok: false, error: "CONTENT_TOO_BIG" }
     })
 
-    const testLayer = TelegraphSpecUploaderLive.pipe(Layer.provide(httpLayer))
+    const testLayer = TelegraphPlanOverviewUploaderLive.pipe(Layer.provide(httpLayer))
 
     // Act & Assert
     return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription).pipe(Effect.flip)
+      const uploader = yield* PlanOverviewUploader
+      const result = yield* uploader.upload({ files: testFiles, description: testDescription }).pipe(Effect.flip)
 
-      expect(result).toBeInstanceOf(SpecUploaderError)
+      expect(result).toBeInstanceOf(PlanOverviewUploaderError)
       expect(result.message).toContain("CONTENT_TOO_BIG")
     }).pipe(Effect.provide(testLayer))
   })
 
-  it.effect("fails with SpecUploaderError when createAccount fails", () => {
+  it.effect("fails with PlanOverviewUploaderError when createAccount fails", () => {
     // Arrange
     const { httpLayer } = makeTelegraphHttpClient({
       createAccount: { ok: false, error: "SHORT_NAME_REQUIRED" }
     })
 
-    const testLayer = TelegraphSpecUploaderLive.pipe(Layer.provide(httpLayer))
+    const testLayer = TelegraphPlanOverviewUploaderLive.pipe(Layer.provide(httpLayer))
 
     // Act & Assert
     return Effect.gen(function*() {
-      const result = yield* Effect.provide(SpecUploader, testLayer).pipe(Effect.flip)
+      const result = yield* Effect.provide(PlanOverviewUploader, testLayer).pipe(Effect.flip)
 
-      expect(result).toBeInstanceOf(SpecUploaderError)
+      expect(result).toBeInstanceOf(PlanOverviewUploaderError)
       expect(result.message).toContain("SHORT_NAME_REQUIRED")
     })
   })

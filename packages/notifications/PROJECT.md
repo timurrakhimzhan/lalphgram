@@ -256,39 +256,39 @@ TrackerLayerMap.get("github")  // → Layer<TaskTracker> using GitHubIssueTracke
 
 ---
 
-### SpecUploader (interface)
-**File**: `services/SpecUploader.ts` | **Tag**: `SpecUploader`
+### PlanOverviewUploader (interface)
+**File**: `services/PlanOverviewUploader.ts` | **Tag**: `PlanOverviewUploader`
 
-Uploads spec HTML to a hosting backend and returns a viewable URL. Two implementations selected at runtime via `SpecUploaderMap`.
+Uploads plan overview files to a hosting backend and returns a viewable URL. Takes spec files directly (not pre-generated HTML) — each implementation handles formatting internally. Two implementations selected at runtime via `PlanOverviewUploaderMap`.
 
 | Method | Signature |
 |---|---|
-| `upload(html, description)` | `Effect<{ url: string }, SpecUploaderError>` |
+| `upload({ files, description })` | `Effect<{ url: string }, PlanOverviewUploaderError>` |
 
-**Error**: `SpecUploaderError`
+**Error**: `PlanOverviewUploaderError`
 
-### GistSpecUploaderLive (SpecUploader impl)
-- Wraps `OctokitClient.createGist` — uploads HTML as `spec.html` in a private gist
+### GistPlanOverviewUploaderLive (PlanOverviewUploader impl)
+- Generates HTML via `generateSpecHtml`, uploads as `spec.html` in a private gist via `OctokitClient.createGist`
 - Constructs viewable URL via `htmlpreview.github.io`
-- **Layer**: `GistSpecUploaderLive` — requires `OctokitClient`
+- **Layer**: `GistPlanOverviewUploaderLive` — requires `OctokitClient`
 
-### TelegraphSpecUploaderLive (SpecUploader impl, default)
+### TelegraphPlanOverviewUploaderLive (PlanOverviewUploader impl, default)
 - Creates anonymous Telegraph account on construction via `POST /createAccount`
-- Converts HTML via `toTelegraphHtml` (Mermaid→PlantUML→kroki.io SVG images, heading downgrade)
+- Generates HTML via `generateSpecHtml`, converts via `toTelegraphContent` using `better-telegraph`'s `parseHtml` (Mermaid→PlantUML→kroki.io SVG images, heading downgrade, unsupported tag stripping)
 - Uploads pages via `POST /createPage` with UUID title for unguessable URL
 - Returns `telegra.ph` URL
-- **Layer**: `TelegraphSpecUploaderLive` — requires `HttpClient`
+- **Layer**: `TelegraphPlanOverviewUploaderLive` — requires `HttpClient`
 
 ---
 
-### SpecUploaderMap
-**File**: `services/SpecUploaderMap.ts` | **Tag**: `SpecUploaderMap`
+### PlanOverviewUploaderMap
+**File**: `services/PlanOverviewUploaderMap.ts` | **Tag**: `PlanOverviewUploaderMap`
 
-`LayerMap.Service` for runtime selection of SpecUploader implementation.
+`LayerMap.Service` for runtime selection of PlanOverviewUploader implementation.
 
 ```ts
-SpecUploaderMap.get("gist")        // → Layer<SpecUploader> using GistSpecUploaderLive
-SpecUploaderMap.get("telegraph")   // → Layer<SpecUploader> using TelegraphSpecUploaderLive (default)
+PlanOverviewUploaderMap.get("gist")        // → Layer<PlanOverviewUploader> using GistPlanOverviewUploaderLive
+PlanOverviewUploaderMap.get("telegraph")   // → Layer<PlanOverviewUploader> using TelegraphPlanOverviewUploaderLive (default)
 ```
 
 ---
@@ -425,7 +425,7 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 - `mermaidToPlantUml(mermaid)` — Pure function converting Mermaid class diagram syntax to PlantUML. Handles `classDiagram`→`@startuml/@enduml`, `~generics~`→`<generics>`, method return type formatting, relationship arrows
 
 ### TelegraphHtml (`lib/TelegraphHtml.ts`)
-- `toTelegraphHtml(html)` — Pure function transforming `generateSpecHtml` output into Telegraph-compatible HTML. Extracts body content, replaces `<pre class="mermaid">` blocks with `<img>` tags pointing to kroki.io PlantUML SVG URLs (via zlib+base64url encoding), downgrades headings (h1/h2→h3, h5/h6→h4), strips scripts/styles
+- `toTelegraphContent(html)` — Pure function transforming `generateSpecHtml` output into Telegraph-compatible Node array. Extracts body content, replaces `<pre class="mermaid">` blocks with `<img>` tags pointing to kroki.io PlantUML SVG URLs (via zlib+base64url encoding), then uses `better-telegraph`'s `parseHtml` for HTML→Telegraph Node conversion (handles heading downgrades, unsupported tag stripping)
 
 ### TelegramFormatter (`lib/TelegramFormatter.ts`)
 - `markdownToTelegramHtml(md)` — Converts markdown to Telegram HTML subset (bold, italic, code, links, headers)
@@ -438,49 +438,78 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 
 ---
 
-## EventLoop (`services/EventLoop.ts`)
+## ChatMachine (`services/ChatMachine.ts`)
 
-**Dependencies**: All services plus `SpecUploader` (for spec HTML hosting)
+State machine for the interactive Telegram chat flow, built with `@effect/experimental/Machine`.
 
-### Spec File Delivery (`sendSpecFiles`)
-When spec + analysis + idle flags are all met, reads spec files from `PlanSession`, generates a self-contained HTML page via `generateSpecHtml`, uploads via `SpecUploader.upload`, and sends the returned URL via Telegram. Falls back to chunked raw Telegram text if upload fails.
+### Architecture
+- Uses `Machine.make` with `Machine.procedures` — actor model with `send()` for requests
+- Services captured at init via closures — all handlers have `R = never`
+- State is `Data.TaggedEnum<ChatState>` — all sub-state folded into state variants (no Refs)
+- All handlers return `[void, newState]` (resolved response + next state)
 
-### State Machine (`ChatState`)
-Single `Ref<ChatState>` discriminated union with 9 states:
+### Exports
+- Button label constants: `PLAN_BUTTON_LABEL`, `ABORT_BUTTON_LABEL`, `APPROVE_BUTTON_LABEL`, etc.
+- Keyboards: `IDLE_KEYBOARD`
+- Request types: `UserMessage`, `PlanTextOutput`, `PlanQuestionReceived`, `PlanSpecCreatedReq`, `PlanSpecUpdatedReq`, `PlanAnalysisReadyReq`, `PlanAwaitingInputReq`, `PlanCompletedReq`, `PlanFailedReq`
+- State types: `ChatState`, `ReadyFlags`
+- Machine: `chatMachine`
 
-| State | Data | Reply Keyboard |
+### State (`ChatState`)
+
+| State | Data | Keyboard |
 |---|---|---|
 | `Idle` | — | [Plan, New project] |
 | `SelectingProject` | — | (inline: project buttons + New project + Abort) |
 | `SelectingPlanType` | `projectId` | (inline: Feature/Bug/Refactor/Other/Abort) |
 | `CollectingPlan` | `projectId`, `planType`, `buffer` | [Done, Abort] |
-| `SessionRunning` | `projectId` | [Abort] |
-| `AwaitingAnswers` | `remaining` | [Abort] |
-| `AwaitingFollowUpDecision` | `projectId`, `message` | (inline: Buffer/Interrupt/Omit/Abort) |
-| `SpecReady` | `projectId` | [Approve, Abort] |
+| `SessionRunning` | `projectId`, `planType`, `pendingAnswerCount`, `pendingOptionLabels`, `answersBuffer`, `awaitingFreeTextAnswer`, `lastQuestionMessage`, `readyFlags`, `analysisFollowUpSent` | [Abort] |
+| `AwaitingFollowUpDecision` | `projectId`, `planType`, `message`, `readyFlags`, `analysisFollowUpSent` | (inline: Buffer/Interrupt/Discard/Abort) |
+| `SpecReady` | `projectId`, `planType`, `readyFlags`, `analysisFollowUpSent` | [Approve, Abort] |
 | `CreatingProject` | `step`, `data`, `continueWithPlan` | [Abort] |
 
-### State Transitions (incoming messages)
+### Request Handlers (procedures)
 
+**UserMessage** — dispatches on `state._tag`:
 - **Idle** + "Plan" → list projects: 0 → error, 1 → auto-select `SelectingPlanType`, >1 → `SelectingProject`
 - **Idle** + "New project" → `CreatingProject` (continueWithPlan=false)
 - **SelectingProject** + project → `SelectingPlanType`; + "New project" → `CreatingProject` (continueWithPlan=true); + "Abort" → `Idle`
 - **SelectingPlanType** + plan type → `CollectingPlan`; + "Abort" → `Idle`
-- **CollectingPlan** + text → buffer it; + "Done" → `SessionRunning` (start session with projectId); + "Abort" → `Idle`
-- **SessionRunning** + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
-- **AwaitingAnswers** + text → answer, decrement; if 0 remaining → `SessionRunning`; + "Abort" → reject + `Idle`
-- **AwaitingFollowUpDecision** + "Buffer"/"Interrupt"/"Omit" → handle + `SessionRunning`; + "Abort" → reject + `Idle`
-- **SpecReady** + "Approve" → approve + `SessionRunning`; + "Abort" → reject + `Idle`; + text → `AwaitingFollowUpDecision`
+- **CollectingPlan** + text → buffer; + "Done" → `SessionRunning` (start session); + "Abort" → `Idle`
+- **SessionRunning** + "Abort" → reject + `Idle`; + option → buffer answer (submit when all answered); + "Custom answer" → free-text mode; + text (idle) → sendFollowUp; + text (busy) → `AwaitingFollowUpDecision`
+- **AwaitingFollowUpDecision** + "Buffer"/"Interrupt"/"Discard" → handle + `SessionRunning`; + "Abort" → reject + `Idle`
+- **SpecReady** + "Approve" → approve + `SessionRunning`; + "Abort" → reject + `Idle`; + text → sendFollowUp or `AwaitingFollowUpDecision`
 - **CreatingProject** → 5-step wizard (Name→Concurrency→TargetBranch→GitFlow→ReviewAgent) → createProject → if continueWithPlan: `SelectingPlanType`, else: `Idle`
 
-### State Transitions (plan events)
+**PlanTextOutput** → send text chunks (no state change)
+**PlanQuestionReceived** → update pendingAnswerCount/labels, send question UI (SessionRunning only)
+**PlanSpecCreatedReq/PlanSpecUpdatedReq** → set spec flag, maybe send analysis follow-up, check all ready → maybe `SpecReady`
+**PlanAnalysisReadyReq** → set analysis flag, check all ready → maybe `SpecReady`
+**PlanAwaitingInputReq** → set idle flag, check all ready → maybe `SpecReady`
+**PlanCompletedReq** / **PlanFailedReq** → `Idle`
 
-- `PlanTextOutput` → send text (no state change)
-- `PlanQuestion` → `AwaitingAnswers(N)` + "Please answer all N questions above."
-- `PlanSpecReady` → `SpecReady`
-- `PlanCompleted` / `PlanFailed` → `Idle` (with Plan button restored)
+### Spec File Delivery (`sendSpecFiles`)
+When spec + analysis + idle `ReadyFlags` are all met, reads spec files from `PlanSession`, uploads via `PlanOverviewUploader.upload`, and sends the returned URL via Telegram. Falls back to chunked raw Telegram text if upload fails.
 
-### App Event Dispatching
+**Dependencies** (captured at init): `MessengerAdapter`, `PlanSession`, `ProjectStore`, `PlanOverviewUploader`
+
+---
+
+## EventLoop (`services/EventLoop.ts`)
+
+### Layer Composition (`MainLayer`)
+Wires all service layers together. Requires `AppRuntimeConfig`, `TelegramConfigStore`, and `PlanCommandBuilder` externally.
+
+### Event Loop (`runEventLoop`)
+Boots `chatMachine`, bridges external streams, and dispatches PR/task events.
+
+1. Boots `Machine.boot(chatMachine)` → actor
+2. Bridges `MessengerAdapter.incomingMessages` → `actor.send(UserMessage)` (daemon fiber)
+3. Bridges `PlanSession.events` → `actor.send(PlanSpecCreatedReq | PlanTextOutput | ...)` (daemon fiber)
+4. Merges `PullRequestTracker` + `AutoMerge` + `TaskTracker` event streams → `dispatchEvent` (daemon fiber)
+5. Blocks with `Effect.never` to keep Machine scope alive
+
+### App Event Dispatching (`dispatchEvent`)
 
 - `TaskCreated` → Telegram notification with link
 - `TaskUpdated` → Notification with old → new state
@@ -492,9 +521,10 @@ Single `Ref<ChatState>` discriminated union with 9 states:
 
 ### Stream Architecture
 
-Two forked streams run concurrently:
-1. **Plan stream** (daemon fiber): merges `incomingMessages` + `planSession.events` → handles interactively
-2. **Polling stream** (main): merges `PullRequestTracker` + `AutoMerge` + `TaskTracker` event streams → dispatches notifications
+Three daemon fibers run concurrently:
+1. **Incoming messages** → `UserMessage` requests to machine actor
+2. **Plan events** → plan request types to machine actor
+3. **Polling stream**: merges `PullRequestTracker` + `AutoMerge` + `TaskTracker` event streams → dispatches notifications
 
 ---
 
@@ -512,8 +542,8 @@ AppContext
         │     └─> LinearTracker
         ├─> TrackerLayerMap (selects Linear or GitHub tracker)
         │     └─> TaskTracker (provided dynamically)
-        ├─> SpecUploaderMap (selects Gist or Telegraph uploader)
-        │     └─> SpecUploader (provided dynamically)
+        ├─> PlanOverviewUploaderMap (selects Gist or Telegraph uploader)
+        │     └─> PlanOverviewUploader (provided dynamically)
 FetchHttpClient (provided in Main.ts for Telegraph HTTP requests)
         └─> TelegramConfig
               └─> TelegramAdapter → MessengerAdapter
@@ -524,7 +554,7 @@ CommentTimer (requires TaskTracker, MessengerAdapter, BranchParser, AppRuntimeCo
 PlanSession (requires PlanCommandBuilder, AppContext)
 ProjectStore (requires AppContext, FileSystem, Path)
 
-EventLoop (requires all of the above + SpecUploader for spec hosting)
+EventLoop (requires all of the above + PlanOverviewUploader for spec hosting)
 ```
 
 ---
