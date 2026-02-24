@@ -41,8 +41,7 @@ export interface LalphConfigService {
   readonly githubToken: Effect.Effect<string, LalphConfigError>
   readonly linearToken: Effect.Effect<string, LalphConfigError>
   readonly issueSource: "linear" | "github"
-  readonly specUploader: "cloudflare" | "gist" | "telegraph"
-  readonly specUploaderUrl: Effect.Effect<string, LalphConfigError>
+  readonly specUploader: "gist" | "telegraph"
   readonly repoFullName: string
 }
 
@@ -136,9 +135,7 @@ export const LalphConfigLive = Layer.scoped(
     const specUploaderRaw = yield* readStringFile("settings.specUploader").pipe(
       Effect.orElseSucceed(() => "telegraph")
     )
-    const specUploader = specUploaderRaw === "cloudflare"
-      ? "cloudflare" as const
-      : specUploaderRaw === "gist"
+    const specUploader = specUploaderRaw === "gist"
       ? "gist" as const
       : "telegraph" as const
 
@@ -215,7 +212,6 @@ export const LalphConfigLive = Layer.scoped(
       ),
       issueSource,
       specUploader,
-      specUploaderUrl: readStringFile("settings.specUploaderUrl"),
       repoFullName
     })
   })

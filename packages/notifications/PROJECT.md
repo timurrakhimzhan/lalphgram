@@ -82,8 +82,7 @@ Reads credentials from `~/.lalph/config/` files. Watches file system for token c
 | `githubToken` | `Effect<string>` | Dynamic — re-reads on file change |
 | `linearToken` | `Effect<string>` | Dynamic — re-reads on file change |
 | `issueSource` | `"linear" \| "github"` | Static — from `settings.issueSource` file |
-| `specUploader` | `"cloudflare" \| "gist" \| "telegraph"` | Static — from `settings.specUploader` (default `"telegraph"`) |
-| `specUploaderUrl` | `Effect<string>` | From `settings.specUploaderUrl` file |
+| `specUploader` | `"gist" \| "telegraph"` | Static — from `settings.specUploader` (default `"telegraph"`) |
 | `repoFullName` | `string` | Parsed from `git remote get-url origin` |
 
 **Error**: `LalphConfigError`
@@ -260,18 +259,13 @@ TrackerLayerMap.get("github")  // → Layer<TaskTracker> using GitHubIssueTracke
 ### SpecUploader (interface)
 **File**: `services/SpecUploader.ts` | **Tag**: `SpecUploader`
 
-Uploads spec HTML to a hosting backend and returns a viewable URL. Three implementations selected at runtime via `SpecUploaderMap`.
+Uploads spec HTML to a hosting backend and returns a viewable URL. Two implementations selected at runtime via `SpecUploaderMap`.
 
 | Method | Signature |
 |---|---|
 | `upload(html, description)` | `Effect<{ url: string }, SpecUploaderError>` |
 
 **Error**: `SpecUploaderError`
-
-### CloudflareSpecUploaderLive (SpecUploader impl)
-- POSTs HTML to the Cloudflare Worker URL from `LalphConfig.specUploaderUrl`
-- Parses JSON response `{ url }` and returns it
-- **Layer**: `CloudflareSpecUploaderLive` — requires `LalphConfig`
 
 ### GistSpecUploaderLive (SpecUploader impl)
 - Wraps `OctokitClient.createGist` — uploads HTML as `spec.html` in a private gist
@@ -293,7 +287,6 @@ Uploads spec HTML to a hosting backend and returns a viewable URL. Three impleme
 `LayerMap.Service` for runtime selection of SpecUploader implementation.
 
 ```ts
-SpecUploaderMap.get("cloudflare")  // → Layer<SpecUploader> using CloudflareSpecUploaderLive
 SpecUploaderMap.get("gist")        // → Layer<SpecUploader> using GistSpecUploaderLive
 SpecUploaderMap.get("telegraph")   // → Layer<SpecUploader> using TelegraphSpecUploaderLive (default)
 ```
@@ -497,7 +490,7 @@ AppContext
         │     └─> LinearTracker
         ├─> TrackerLayerMap (selects Linear or GitHub tracker)
         │     └─> TaskTracker (provided dynamically)
-        ├─> SpecUploaderMap (selects Cloudflare, Gist, or Telegraph uploader)
+        ├─> SpecUploaderMap (selects Gist or Telegraph uploader)
         │     └─> SpecUploader (provided dynamically)
 FetchHttpClient (provided in Main.ts for Telegraph HTTP requests)
         └─> TelegramConfig

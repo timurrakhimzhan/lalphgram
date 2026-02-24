@@ -2,10 +2,8 @@ import type { HttpClientRequest } from "@effect/platform"
 import { HttpClient, HttpClientResponse } from "@effect/platform"
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { LalphConfig, LalphConfigError } from "../src/services/LalphConfig.js"
 import { OctokitClient } from "../src/services/OctokitClient.js"
 import {
-  CloudflareSpecUploaderLive,
   GistSpecUploaderLive,
   SpecUploader,
   SpecUploaderError,
@@ -14,112 +12,6 @@ import {
 
 const testHtml = "<!DOCTYPE html><html><body>test</body></html>"
 const testDescription = "Spec: Feature"
-
-describe("CloudflareSpecUploaderLive", () => {
-  it.effect("uploads HTML and returns URL from worker response", () => {
-    // Arrange
-    const mockResponse = { url: "https://spec-worker.example.com/abc-123" }
-    const fetchSpy = vi.fn(() => Promise.resolve(new Response(JSON.stringify(mockResponse), { status: 200 })))
-    vi.stubGlobal("fetch", fetchSpy)
-
-    const configMock = LalphConfig.of({
-      githubToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      linearToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      issueSource: "github",
-      specUploader: "cloudflare",
-      specUploaderUrl: Effect.succeed("https://spec-worker.example.com"),
-      repoFullName: "test/test"
-    })
-
-    const testLayer = CloudflareSpecUploaderLive.pipe(
-      Layer.provide(Layer.succeed(LalphConfig, configMock))
-    )
-
-    // Act & Assert
-    return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription)
-
-      expect(result.url).toBe("https://spec-worker.example.com/abc-123")
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://spec-worker.example.com",
-        expect.objectContaining({
-          method: "POST",
-          headers: { "Content-Type": "text/html" },
-          body: testHtml
-        })
-      )
-    }).pipe(
-      Effect.provide(testLayer),
-      Effect.ensuring(Effect.sync(() => vi.unstubAllGlobals()))
-    )
-  })
-
-  it.effect("fails with SpecUploaderError on non-OK response", () => {
-    // Arrange
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(new Response("Internal Server Error", { status: 500, statusText: "Internal Server Error" }))
-      )
-    )
-
-    const configMock = LalphConfig.of({
-      githubToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      linearToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      issueSource: "github",
-      specUploader: "cloudflare",
-      specUploaderUrl: Effect.succeed("https://spec-worker.example.com"),
-      repoFullName: "test/test"
-    })
-
-    const testLayer = CloudflareSpecUploaderLive.pipe(
-      Layer.provide(Layer.succeed(LalphConfig, configMock))
-    )
-
-    // Act & Assert
-    return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription).pipe(Effect.flip)
-
-      expect(result).toBeInstanceOf(SpecUploaderError)
-      expect(result.message).toContain("500")
-    }).pipe(
-      Effect.provide(testLayer),
-      Effect.ensuring(Effect.sync(() => vi.unstubAllGlobals()))
-    )
-  })
-
-  it.effect("fails with SpecUploaderError on network error", () => {
-    // Arrange
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("Network failure"))))
-
-    const configMock = LalphConfig.of({
-      githubToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      linearToken: Effect.fail(new LalphConfigError({ message: "not needed", cause: null })),
-      issueSource: "github",
-      specUploader: "cloudflare",
-      specUploaderUrl: Effect.succeed("https://spec-worker.example.com"),
-      repoFullName: "test/test"
-    })
-
-    const testLayer = CloudflareSpecUploaderLive.pipe(
-      Layer.provide(Layer.succeed(LalphConfig, configMock))
-    )
-
-    // Act & Assert
-    return Effect.gen(function*() {
-      const uploader = yield* SpecUploader
-      const result = yield* uploader.upload(testHtml, testDescription).pipe(Effect.flip)
-
-      expect(result).toBeInstanceOf(SpecUploaderError)
-      expect(result.message).toContain("Failed to upload spec to Cloudflare Worker")
-    }).pipe(
-      Effect.provide(testLayer),
-      Effect.ensuring(Effect.sync(() => vi.unstubAllGlobals()))
-    )
-  })
-})
 
 describe("GistSpecUploaderLive", () => {
   it.effect("uploads HTML via createGist and returns htmlpreview URL", () => {

@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { LayerMap } from "effect"
-import { CloudflareSpecUploaderLive, GistSpecUploaderLive, TelegraphSpecUploaderLive } from "./SpecUploader.js"
+import { GistSpecUploaderLive, TelegraphSpecUploaderLive } from "./SpecUploader.js"
 
 /**
  * @since 1.0.0
@@ -11,7 +11,6 @@ import { CloudflareSpecUploaderLive, GistSpecUploaderLive, TelegraphSpecUploader
  */
 export class SpecUploaderMap extends LayerMap.Service<SpecUploaderMap>()("SpecUploaderMap", {
   layers: {
-    cloudflare: CloudflareSpecUploaderLive,
     gist: GistSpecUploaderLive,
     telegraph: TelegraphSpecUploaderLive
   }

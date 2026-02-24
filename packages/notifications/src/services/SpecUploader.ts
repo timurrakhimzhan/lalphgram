@@ -1,13 +1,12 @@
 /**
  * Service for uploading spec HTML files to a hosting backend.
- * Three implementations: Cloudflare Worker, GitHub Gist, and Telegraph (default).
+ * Two implementations: GitHub Gist and Telegraph (default).
  * @since 1.0.0
  */
 import { HttpClient, HttpClientRequest } from "@effect/platform"
 import { Context, Data, Effect, Layer, Schema } from "effect"
 import * as Crypto from "node:crypto"
 import { toTelegraphHtml } from "../lib/TelegraphHtml.js"
-import { LalphConfig } from "./LalphConfig.js"
 import { OctokitClient } from "./OctokitClient.js"
 
 /**
@@ -32,68 +31,6 @@ export interface SpecUploaderService {
  * @category context
  */
 export class SpecUploader extends Context.Tag("SpecUploader")<SpecUploader, SpecUploaderService>() {}
-
-/**
- * Cloudflare Worker implementation — POSTs HTML to the worker, gets back a URL.
- * @since 1.0.0
- * @category layers
- */
-export const CloudflareSpecUploaderLive = Layer.effect(
-  SpecUploader,
-  Effect.gen(function*() {
-    const config = yield* LalphConfig
-    const baseUrl = yield* config.specUploaderUrl
-
-    return SpecUploader.of({
-      upload: (html, description) =>
-        Effect.gen(function*() {
-          const response = yield* Effect.tryPromise({
-            try: () =>
-              fetch(baseUrl, {
-                method: "POST",
-                headers: { "Content-Type": "text/html" },
-                body: html
-              }),
-            catch: (err) =>
-              new SpecUploaderError({
-                message: `Failed to upload spec to Cloudflare Worker: ${String(err)}`,
-                cause: err
-              })
-          })
-
-          if (!response.ok) {
-            return yield* Effect.fail(
-              new SpecUploaderError({
-                message: `Cloudflare Worker returned ${response.status}: ${response.statusText}`,
-                cause: null
-              })
-            )
-          }
-
-          const text = yield* Effect.tryPromise({
-            try: () => response.text(),
-            catch: (err) =>
-              new SpecUploaderError({
-                message: `Failed to read Cloudflare Worker response: ${String(err)}`,
-                cause: err
-              })
-          })
-
-          const json = yield* Effect.try({
-            try: () => JSON.parse(text),
-            catch: (err) =>
-              new SpecUploaderError({
-                message: `Failed to parse Cloudflare Worker response JSON: ${String(err)}`,
-                cause: err
-              })
-          })
-
-          const url = String(json.url)
-          return { url }
-        }).pipe(Effect.annotateLogs("description", description))
-    })
-  })
-)
 
 /**
  * GitHub Gist implementation — wraps existing OctokitClient.createGist.
