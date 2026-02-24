@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Effect, Layer, Queue, Stream } from "effect"
+import { Effect, Layer, Option, Queue, Stream } from "effect"
 import {
   PRAutoMerged,
   PRCIFailed,
@@ -12,6 +12,7 @@ import {
 import type { AutoMergeEvent, PullRequestEvent, TaskTrackerEvent } from "../src/Events.js"
 import { BranchParserLive } from "../src/lib/BranchParser.js"
 import { GitHubComment, GitHubPullRequest } from "../src/schemas/GitHubSchemas.js"
+import { LalphProject } from "../src/schemas/ProjectSchemas.js"
 import { TrackerIssue } from "../src/schemas/TrackerSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge } from "../src/services/AutoMerge.js"
@@ -23,6 +24,7 @@ import {
   BUG_BUTTON_LABEL,
   FEATURE_BUTTON_LABEL,
   INTERRUPT_BUTTON_LABEL,
+  NEW_PROJECT_BUTTON_LABEL,
   OMIT_BUTTON_LABEL,
   OTHER_BUTTON_LABEL,
   PLAN_BUTTON_LABEL,
@@ -46,6 +48,7 @@ import {
   PlanSessionError,
   PlanSpecCreated
 } from "../src/services/PlanSession.js"
+import { ProjectStore } from "../src/services/ProjectStore.js"
 import { PullRequestTracker } from "../src/services/PullRequestTracker.js"
 import { TaskTracker } from "../src/services/TaskTracker/TaskTracker.js"
 import type { TaskTrackerService } from "../src/services/TaskTracker/TaskTracker.js"
@@ -197,6 +200,35 @@ const makePlanSessionMock = (overrides?: { isIdle?: Effect.Effect<boolean> }) =>
     events: Stream.never
   })
 
+const defaultProject = new LalphProject({
+  id: "default-project",
+  enabled: true,
+  targetBranch: Option.none(),
+  concurrency: 1,
+  gitFlow: "pr",
+  reviewAgent: false
+})
+
+const makeProjectStoreMock = (overrides?: {
+  listProjects?: Effect.Effect<ReadonlyArray<LalphProject>>
+}) =>
+  ProjectStore.of({
+    listProjects: overrides?.listProjects ?? Effect.succeed([defaultProject]),
+    getProject: vi.fn((id: string) => Effect.succeed(new LalphProject({ ...defaultProject, id }))),
+    createProject: vi.fn((data) =>
+      Effect.succeed(
+        new LalphProject({
+          id: data.id,
+          enabled: true,
+          targetBranch: data.targetBranch,
+          concurrency: data.concurrency,
+          gitFlow: data.gitFlow,
+          reviewAgent: data.reviewAgent
+        })
+      )
+    )
+  })
+
 const makeTestLayer = (
   prEvents: ReadonlyArray<PullRequestEvent>,
   overrides: {
@@ -206,6 +238,7 @@ const makeTestLayer = (
     commentTimerMock?: ReturnType<typeof makeCommentTimerMock>
     planSessionMock?: ReturnType<typeof makePlanSessionMock>
     octokitClientMock?: ReturnType<typeof makeOctokitClientMock>
+    projectStoreMock?: ReturnType<typeof makeProjectStoreMock>
     taskEvents?: ReadonlyArray<TaskTrackerEvent>
     autoMergeEvents?: ReadonlyArray<AutoMergeEvent>
   } = {}
@@ -225,6 +258,7 @@ const makeTestLayer = (
   const commentTimerMock = overrides.commentTimerMock ?? makeCommentTimerMock()
   const planSessionMock = overrides.planSessionMock ?? makePlanSessionMock()
   const octokitClientMock = overrides.octokitClientMock ?? makeOctokitClientMock()
+  const projectStoreMock = overrides.projectStoreMock ?? makeProjectStoreMock()
 
   return {
     layer: Layer.mergeAll(
@@ -235,6 +269,7 @@ const makeTestLayer = (
       Layer.succeed(TaskTracker, trackerMock),
       Layer.succeed(CommentTimer, commentTimerMock),
       Layer.succeed(PlanSession, planSessionMock),
+      Layer.succeed(ProjectStore, projectStoreMock),
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
       Layer.succeed(OctokitClient, octokitClientMock),
       BranchParserLive
@@ -244,7 +279,8 @@ const makeTestLayer = (
     trackerMock,
     commentTimerMock,
     planSessionMock,
-    octokitClientMock
+    octokitClientMock,
+    projectStoreMock
   }
 }
 
@@ -486,7 +522,7 @@ describe("multi-step plan input", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "🚀 Notification service started.",
-          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
         })
       )
     }).pipe(Effect.provide(layer))
@@ -586,7 +622,7 @@ describe("multi-step plan input", () => {
       yield* flush
 
       // Assert
-      expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT")
+      expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT", undefined)
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Planning started...",
@@ -1111,7 +1147,7 @@ describe("plan abort", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Plan aborted.",
-          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
         })
       )
     }).pipe(Effect.provide(layer))
@@ -1152,7 +1188,7 @@ describe("plan abort", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Plan aborted.",
-          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
         })
       )
     }).pipe(Effect.provide(layer))
@@ -1196,7 +1232,7 @@ describe("plan abort", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Plan aborted.",
-          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
         })
       )
     }).pipe(Effect.provide(layer))
@@ -1288,7 +1324,7 @@ describe("my own answer flow", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Plan aborted.",
-          replyKeyboard: [{ label: PLAN_BUTTON_LABEL }]
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
         })
       )
     }))
@@ -1348,6 +1384,375 @@ describe("my own answer flow", () => {
             { label: "Option B" },
             { label: "Custom answer" }
           ]
+        })
+      )
+    }))
+})
+
+describe("project selection", () => {
+  it.effect("auto-selects single project and shows plan type", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const projectStoreMock = makeProjectStoreMock()
+    const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* Effect.fork(runEventLoop)
+      yield* flush
+
+      // Assert — shows plan type selection directly (auto-selected)
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "What type of change?",
+          options: expect.arrayContaining([{ label: FEATURE_BUTTON_LABEL }])
+        })
+      )
+      // No "Select a project:" message
+      expect(messengerMock.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Select a project:" })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("shows project buttons when multiple projects exist", () => {
+    // Arrange
+    const projectA = new LalphProject({
+      id: "project-a",
+      enabled: true,
+      targetBranch: Option.none(),
+      concurrency: 1,
+      gitFlow: "pr",
+      reviewAgent: false
+    })
+    const projectB = new LalphProject({
+      id: "project-b",
+      enabled: true,
+      targetBranch: Option.none(),
+      concurrency: 1,
+      gitFlow: "pr",
+      reviewAgent: false
+    })
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const projectStoreMock = makeProjectStoreMock({
+      listProjects: Effect.succeed([projectA, projectB])
+    })
+    const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* Effect.fork(runEventLoop)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Select a project:",
+          options: expect.arrayContaining([
+            { label: "project-a" },
+            { label: "project-b" },
+            { label: NEW_PROJECT_BUTTON_LABEL },
+            { label: ABORT_BUTTON_LABEL }
+          ])
+        })
+      )
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("project selection leads to plan type selection", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const projectA = new LalphProject({
+        id: "project-a",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const projectB = new LalphProject({
+        id: "project-b",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" }))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const projectStoreMock = makeProjectStoreMock({
+        listProjects: Effect.succeed([projectA, projectB])
+      })
+      const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "project-a", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "What type of change?",
+          options: expect.arrayContaining([{ label: FEATURE_BUTTON_LABEL }])
+        })
+      )
+    }))
+
+  it.effect("abort during project selection returns to idle", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const projectA = new LalphProject({
+        id: "project-a",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const projectB = new LalphProject({
+        id: "project-b",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" }))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const projectStoreMock = makeProjectStoreMock({
+        listProjects: Effect.succeed([projectA, projectB])
+      })
+      const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Plan aborted.",
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
+        })
+      )
+    }))
+
+  it.effect("shows error when no projects exist", () => {
+    // Arrange
+    const incomingStream = Stream.fromIterable([
+      new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" })
+    ])
+    const messengerMock = makeMessengerMock(incomingStream)
+    const projectStoreMock = makeProjectStoreMock({
+      listProjects: Effect.succeed([])
+    })
+    const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+    // Act
+    return Effect.gen(function*() {
+      yield* Effect.fork(runEventLoop)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("No projects. Create one first.")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("passes projectId to planSession.start when multiple projects", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const projectA = new LalphProject({
+        id: "project-a",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const projectB = new LalphProject({
+        id: "project-b",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const planSessionMock = makePlanSessionMock()
+      const projectStoreMock = makeProjectStoreMock({
+        listProjects: Effect.succeed([projectA, projectB])
+      })
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock, projectStoreMock })
+
+      // Act — fork first, then send messages with flushes
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "project-a", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: FEATURE_BUTTON_LABEL, from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "my plan", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Done", from: "user" }))
+      yield* flush
+
+      // Assert — projectId passed since >1 projects
+      expect(planSessionMock.start).toHaveBeenCalledWith("my plan", "project-a")
+    }))
+})
+
+describe("project creation wizard", () => {
+  it.effect("creates project through full wizard flow", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: NEW_PROJECT_BUTTON_LABEL, from: "user" }))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const projectStoreMock = makeProjectStoreMock()
+      const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      // Name
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "my-project", from: "user" }))
+      yield* flush
+      // Concurrency
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "2", from: "user" }))
+      yield* flush
+      // TargetBranch
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "main", from: "user" }))
+      yield* flush
+      // GitFlow
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "PR", from: "user" }))
+      yield* flush
+      // ReviewAgent
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Yes", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Enter project name:")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Concurrency (tasks in parallel):" })
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Target branch (type branch name or skip):" })
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Git flow:" })
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Enable review agent?" })
+      )
+      expect(projectStoreMock.createProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "my-project",
+          concurrency: 2,
+          gitFlow: "pr",
+          reviewAgent: true
+        })
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        "Project <b>my-project</b> created."
+      )
+    }))
+
+  it.effect("abort during wizard returns to idle", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: NEW_PROJECT_BUTTON_LABEL, from: "user" }))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock })
+
+      // Act
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      // Enter name step, then abort
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: ABORT_BUTTON_LABEL, from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Project creation cancelled.",
+          replyKeyboard: expect.arrayContaining([{ label: PLAN_BUTTON_LABEL }])
+        })
+      )
+    }))
+
+  it.effect("new project from SelectingProject continues to plan", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const projectA = new LalphProject({
+        id: "project-a",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const projectB = new LalphProject({
+        id: "project-b",
+        enabled: true,
+        targetBranch: Option.none(),
+        concurrency: 1,
+        gitFlow: "pr",
+        reviewAgent: false
+      })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: PLAN_BUTTON_LABEL, from: "user" }))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const projectStoreMock = makeProjectStoreMock({
+        listProjects: Effect.succeed([projectA, projectB])
+      })
+      const { layer } = makeTestLayer([], { messengerMock, projectStoreMock })
+
+      // Act — select "New project" from project list
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: NEW_PROJECT_BUTTON_LABEL, from: "user" }))
+      yield* flush
+      // Wizard: Name → Concurrency → TargetBranch → GitFlow → ReviewAgent
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "new-proj", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "1", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Skip", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Commit", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "No", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert — after wizard, continues to plan type selection
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        "Project <b>new-proj</b> created."
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "What type of change?",
+          options: expect.arrayContaining([{ label: FEATURE_BUTTON_LABEL }])
         })
       )
     }))
