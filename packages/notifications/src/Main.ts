@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { Command as CliCommand, Options, Prompt } from "@effect/cli"
-import { Command as PlatformCommand, FileSystem, Path } from "@effect/platform"
+import { Command as PlatformCommand, FetchHttpClient, FileSystem, Path } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
 import { createRequire } from "node:module"
@@ -163,6 +163,7 @@ const logLevelLayer = Layer.unwrapEffect(
 Effect.suspend(() => cli(process.argv)).pipe(
   Effect.provide(TelegramConfigLive),
   Effect.provide(AppContextLive),
+  Effect.provide(FetchHttpClient.layer),
   Effect.provide(NodeContext.layer),
   Effect.provide(logLevelLayer),
   NodeRuntime.runMain

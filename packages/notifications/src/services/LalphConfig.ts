@@ -41,6 +41,7 @@ export interface LalphConfigService {
   readonly githubToken: Effect.Effect<string, LalphConfigError>
   readonly linearToken: Effect.Effect<string, LalphConfigError>
   readonly issueSource: "linear" | "github"
+  readonly specUploader: "gist" | "telegraph"
   readonly repoFullName: string
 }
 
@@ -131,6 +132,13 @@ export const LalphConfigLive = Layer.scoped(
     const issueSourceRaw = yield* readStringFile("settings.issueSource")
     const issueSource = issueSourceRaw === "linear" ? "linear" as const : "github" as const
 
+    const specUploaderRaw = yield* readStringFile("settings.specUploader").pipe(
+      Effect.orElseSucceed(() => "telegraph")
+    )
+    const specUploader = specUploaderRaw === "gist"
+      ? "gist" as const
+      : "telegraph" as const
+
     const linearAccessToken = issueSource === "linear"
       ? yield* readFile("linear.accessToken", LalphLinearToken).pipe(
         Effect.map((t) => t.token)
@@ -203,6 +211,7 @@ export const LalphConfigLive = Layer.scoped(
         Effect.mapError((cause) => new LalphConfigError({ message: "Failed to get Linear token", cause }))
       ),
       issueSource,
+      specUploader,
       repoFullName
     })
   })
