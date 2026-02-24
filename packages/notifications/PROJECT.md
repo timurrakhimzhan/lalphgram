@@ -82,6 +82,8 @@ Reads credentials from `~/.lalph/config/` files. Watches file system for token c
 | `githubToken` | `Effect<string>` | Dynamic — re-reads on file change |
 | `linearToken` | `Effect<string>` | Dynamic — re-reads on file change |
 | `issueSource` | `"linear" \| "github"` | Static — from `settings.issueSource` file |
+| `specUploader` | `"cloudflare" \| "gist" \| "telegraph"` | Static — from `settings.specUploader` (default `"telegraph"`) |
+| `specUploaderUrl` | `Effect<string>` | From `settings.specUploaderUrl` file |
 | `repoFullName` | `string` | Parsed from `git remote get-url origin` |
 
 **Error**: `LalphConfigError`
@@ -255,6 +257,49 @@ TrackerLayerMap.get("github")  // → Layer<TaskTracker> using GitHubIssueTracke
 
 ---
 
+### SpecUploader (interface)
+**File**: `services/SpecUploader.ts` | **Tag**: `SpecUploader`
+
+Uploads spec HTML to a hosting backend and returns a viewable URL. Three implementations selected at runtime via `SpecUploaderMap`.
+
+| Method | Signature |
+|---|---|
+| `upload(html, description)` | `Effect<{ url: string }, SpecUploaderError>` |
+
+**Error**: `SpecUploaderError`
+
+### CloudflareSpecUploaderLive (SpecUploader impl)
+- POSTs HTML to the Cloudflare Worker URL from `LalphConfig.specUploaderUrl`
+- Parses JSON response `{ url }` and returns it
+- **Layer**: `CloudflareSpecUploaderLive` — requires `LalphConfig`
+
+### GistSpecUploaderLive (SpecUploader impl)
+- Wraps `OctokitClient.createGist` — uploads HTML as `spec.html` in a private gist
+- Constructs viewable URL via `htmlpreview.github.io`
+- **Layer**: `GistSpecUploaderLive` — requires `OctokitClient`
+
+### TelegraphSpecUploaderLive (SpecUploader impl, default)
+- Creates anonymous Telegraph account on construction via `POST /createAccount`
+- Converts HTML via `toTelegraphHtml` (Mermaid→PlantUML→kroki.io SVG images, heading downgrade)
+- Uploads pages via `POST /createPage` with UUID title for unguessable URL
+- Returns `telegra.ph` URL
+- **Layer**: `TelegraphSpecUploaderLive` — requires `HttpClient`
+
+---
+
+### SpecUploaderMap
+**File**: `services/SpecUploaderMap.ts` | **Tag**: `SpecUploaderMap`
+
+`LayerMap.Service` for runtime selection of SpecUploader implementation.
+
+```ts
+SpecUploaderMap.get("cloudflare")  // → Layer<SpecUploader> using CloudflareSpecUploaderLive
+SpecUploaderMap.get("gist")        // → Layer<SpecUploader> using GistSpecUploaderLive
+SpecUploaderMap.get("telegraph")   // → Layer<SpecUploader> using TelegraphSpecUploaderLive (default)
+```
+
+---
+
 ### LinearSdkClient
 **File**: `services/LinearSdkClient.ts` | **Tag**: `LinearSdkClient`
 
@@ -366,6 +411,12 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 ### SpecHtmlGenerator (`lib/SpecHtmlGenerator.ts`)
 - `generateSpecHtml(files)` — Pure function that takes `ReadonlyArray<{ name, content, mermaid }>` and returns a self-contained HTML string with Mermaid.js CDN for client-side diagram rendering, basic markdown-to-HTML conversion, and HTML escaping
 
+### MermaidToPlantUml (`lib/MermaidToPlantUml.ts`)
+- `mermaidToPlantUml(mermaid)` — Pure function converting Mermaid class diagram syntax to PlantUML. Handles `classDiagram`→`@startuml/@enduml`, `~generics~`→`<generics>`, method return type formatting, relationship arrows
+
+### TelegraphHtml (`lib/TelegraphHtml.ts`)
+- `toTelegraphHtml(html)` — Pure function transforming `generateSpecHtml` output into Telegraph-compatible HTML. Extracts body content, replaces `<pre class="mermaid">` blocks with `<img>` tags pointing to kroki.io PlantUML SVG URLs (via zlib+base64url encoding), downgrades headings (h1/h2→h3, h5/h6→h4), strips scripts/styles
+
 ### TelegramFormatter (`lib/TelegramFormatter.ts`)
 - `markdownToTelegramHtml(md)` — Converts markdown to Telegram HTML subset (bold, italic, code, links, headers)
 - `splitMessage(text)` — Chunks for Telegram's 4096 char limit (splits on paragraphs, then lines)
@@ -379,10 +430,10 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 
 ## EventLoop (`services/EventLoop.ts`)
 
-**Dependencies**: All services plus `OctokitClient` (for gist upload)
+**Dependencies**: All services plus `SpecUploader` (for spec HTML hosting)
 
 ### Spec File Delivery (`sendSpecFiles`)
-When spec + analysis + idle flags are all met, reads spec files from `PlanSession`, generates a self-contained HTML page via `generateSpecHtml`, uploads as a private GitHub Gist via `OctokitClient.createGist`, and sends a single `htmlpreview.github.io` URL via Telegram. Falls back to chunked raw Telegram text if gist upload fails.
+When spec + analysis + idle flags are all met, reads spec files from `PlanSession`, generates a self-contained HTML page via `generateSpecHtml`, uploads via `SpecUploader.upload`, and sends the returned URL via Telegram. Falls back to chunked raw Telegram text if upload fails.
 
 ### State Machine (`ChatState`)
 Single `Ref<ChatState>` discriminated union with 7 states:
@@ -446,6 +497,9 @@ AppContext
         │     └─> LinearTracker
         ├─> TrackerLayerMap (selects Linear or GitHub tracker)
         │     └─> TaskTracker (provided dynamically)
+        ├─> SpecUploaderMap (selects Cloudflare, Gist, or Telegraph uploader)
+        │     └─> SpecUploader (provided dynamically)
+FetchHttpClient (provided in Main.ts for Telegraph HTTP requests)
         └─> TelegramConfig
               └─> TelegramAdapter → MessengerAdapter
 
@@ -454,7 +508,7 @@ BranchParser (standalone)
 CommentTimer (requires TaskTracker, MessengerAdapter, BranchParser, AppRuntimeConfig)
 PlanSession (requires PlanCommandBuilder, AppContext)
 
-EventLoop (requires all of the above + OctokitClient for gist upload)
+EventLoop (requires all of the above + SpecUploader for spec hosting)
 ```
 
 ---

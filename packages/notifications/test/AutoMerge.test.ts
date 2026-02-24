@@ -55,6 +55,8 @@ const makeLalphConfigMock = () =>
     githubToken: Effect.succeed("test-token"),
     linearToken: Effect.succeed("test-linear-token"),
     issueSource: "github",
+    specUploader: "telegraph",
+    specUploaderUrl: Effect.succeed("https://spec-worker.example.com"),
     repoFullName: "owner/my-repo"
   })
 

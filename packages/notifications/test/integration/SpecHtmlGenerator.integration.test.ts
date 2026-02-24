@@ -1,8 +1,9 @@
-import { FileSystem } from "@effect/platform"
+import { FetchHttpClient, FileSystem } from "@effect/platform"
 import { NodeContext } from "@effect/platform-node"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { generateSpecHtml } from "../../src/lib/SpecHtmlGenerator.js"
+import { SpecUploader, TelegraphSpecUploaderLive } from "../../src/services/SpecUploader.js"
 
 const analysisContent = `# Upload Spec Files as Rendered HTML Gist
 
@@ -112,6 +113,40 @@ const testContent = `# Test Plan
 - **falls back to raw text when gist upload fails** — mock \`createGist\` to fail, verify chunked text behavior
 `
 
+const TestSpecUploader = TelegraphSpecUploaderLive.pipe(Layer.provide(FetchHttpClient.layer))
+
+describe("SpecUploader integration", () => {
+  it.live(
+    "uploads HTML to Telegraph and returns a valid telegra.ph URL",
+    () =>
+      Effect.gen(function*() {
+        // Arrange
+        const files = [
+          { name: "analysis.md", content: analysisContent, mermaid: false },
+          { name: "services.mmd", content: servicesContent, mermaid: true },
+          { name: "test.md", content: testContent, mermaid: false }
+        ]
+        const html = generateSpecHtml(files)
+        const specUploader = yield* SpecUploader
+
+        // Act
+        const result = yield* specUploader.upload(html, "Integration test — safe to delete")
+
+        // Assert
+        expect(result.url).toBeTruthy()
+        expect(result.url).toMatch(/^https:\/\/telegra\.ph\//)
+
+        // Verify the URL serves back content
+        const response = yield* Effect.tryPromise({
+          try: () => fetch(result.url),
+          catch: (err) => new Error(`Failed to fetch uploaded spec: ${err}`)
+        })
+        expect(response.status).toBe(200)
+      }).pipe(Effect.provide(TestSpecUploader)),
+    { timeout: 30_000 }
+  )
+})
+
 describe("SpecHtmlGenerator integration", () => {
   it.live(
     "generates complete HTML page from realistic spec files and writes to disk",
@@ -129,7 +164,7 @@ describe("SpecHtmlGenerator integration", () => {
 
         // Assert — structural validity
         expect(html).toContain("<!DOCTYPE html>")
-        expect(html).toContain('<html lang="en">')
+        expect(html).toContain("<html lang=\"en\">")
         expect(html).toContain("<head>")
         expect(html).toContain("</head>")
         expect(html).toContain("<body>")
@@ -149,7 +184,7 @@ describe("SpecHtmlGenerator integration", () => {
         expect(testIdx).toBeGreaterThan(servicesIdx)
 
         // Assert — mermaid diagram wrapped correctly
-        expect(html).toContain('<pre class="mermaid">')
+        expect(html).toContain("<pre class=\"mermaid\">")
         expect(html).toContain("classDiagram")
         // Mermaid content should be HTML-escaped
         expect(html).toContain("OctokitClient")
