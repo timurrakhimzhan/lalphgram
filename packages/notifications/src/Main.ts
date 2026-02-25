@@ -6,7 +6,7 @@ import { Command as CliCommand, Options, Prompt } from "@effect/cli"
 import { Command as PlatformCommand, FetchHttpClient, FileSystem, Path } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
-import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
 import { AppRuntimeConfig, RuntimeConfig } from "./services/AppRuntimeConfig.js"
 import { MainLayer, runEventLoop } from "./services/EventLoop.js"
@@ -79,10 +79,12 @@ const lalphNotifyCommand = CliCommand.make(
             Effect.map((s) => s.trim())
           )
 
-          // Resolve the SDK-based shim entry point via package resolution
-          const require = createRequire(import.meta.url)
-          const shimPkgDir = pathService.dirname(require.resolve("@template/claude-shim/package.json"))
-          const shimMainTs = pathService.join(shimPkgDir, "src", "bin.ts")
+          // Resolve the SDK-based shim entry point relative to this file
+          const shimMainTs = pathService.join(
+            pathService.dirname(fileURLToPath(import.meta.url)),
+            "shim",
+            "bin.ts"
+          )
 
           yield* Effect.log("Resolved shim paths").pipe(
             Effect.annotateLogs({ realClaudePath, tsxPath, shimMainTs })

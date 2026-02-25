@@ -20,11 +20,11 @@ export const rules = {
 
 export const configs = {
   recommended: {
-    plugins: ["@template"],
+    plugins: ["@qotaq"],
     rules: {
-      "@template/no-direct-result-tag": "warn",
-      "@template/prefer-get-result": "warn",
-      "@template/enforce-service-of-mock": "error"
+      "@qotaq/no-direct-result-tag": "warn",
+      "@qotaq/prefer-get-result": "warn",
+      "@qotaq/enforce-service-of-mock": "error"
     }
   }
 }

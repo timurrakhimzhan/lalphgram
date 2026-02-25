@@ -34,7 +34,7 @@ const collectMessages = (stdout: Stream.Stream<Uint8Array, unknown>) => {
 
     yield* stdout.pipe(
       Stream.map((chunk) => decoder.decode(chunk)),
-      // eslint-disable-next-line @template/no-catch-all-recovery -- error type is unknown from process stdout, catchTag not possible
+      // eslint-disable-next-line @qotaq/no-catch-all-recovery -- error type is unknown from process stdout, catchTag not possible
       Stream.catchAll((err) =>
         Stream.fromEffect(Effect.logError(`stdout stream error: ${String(err)}`)).pipe(Stream.drain)
       ),

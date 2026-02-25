@@ -113,7 +113,7 @@ describe("markdownToTelegraphNodes", () => {
   })
 
   describe("code blocks", () => {
-    it("creates pre > code structure", () => {
+    it("creates pre structure (no nested code tag)", () => {
       // Arrange
       const md = "```\nconst x = 1\n```"
 
@@ -122,7 +122,7 @@ describe("markdownToTelegraphNodes", () => {
 
       // Assert
       expect(result).toEqual([
-        { tag: "pre", children: [{ tag: "code", children: ["const x = 1"] }] }
+        { tag: "pre", children: ["const x = 1"] }
       ])
     })
 
@@ -135,7 +135,7 @@ describe("markdownToTelegraphNodes", () => {
 
       // Assert
       expect(result).toEqual([
-        { tag: "pre", children: [{ tag: "code", children: ["const x: number = 1"] }] }
+        { tag: "pre", children: ["const x: number = 1"] }
       ])
     })
 
@@ -153,7 +153,7 @@ describe("markdownToTelegraphNodes", () => {
       expect(str).toContain("**bold** and *italic* and `code`")
     })
 
-    it("preserves multi-line code", () => {
+    it("preserves multi-line code with br tags for newlines", () => {
       // Arrange
       const md = "```\nline 1\nline 2\nline 3\n```"
 
@@ -162,7 +162,16 @@ describe("markdownToTelegraphNodes", () => {
 
       // Assert
       expect(result).toEqual([
-        { tag: "pre", children: [{ tag: "code", children: ["line 1\nline 2\nline 3"] }] }
+        {
+          tag: "pre",
+          children: [
+            "line 1",
+            { tag: "br" },
+            "line 2",
+            { tag: "br" },
+            "line 3"
+          ]
+        }
       ])
     })
   })
@@ -437,6 +446,17 @@ describe("markdownToTelegraphNodes", () => {
       expect(str).not.toContain("\"tag\":\"strong\"")
       expect(str).not.toContain("\"tag\":\"ul\"")
       expect(str).toContain("# Not a heading")
+      // Lines separated by br tags
+      expect(result).toEqual([{
+        tag: "pre",
+        children: [
+          "# Not a heading",
+          { tag: "br" },
+          "**Not bold**",
+          { tag: "br" },
+          "- Not a list"
+        ]
+      }])
     })
   })
 })

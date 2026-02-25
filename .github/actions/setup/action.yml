@@ -20,6 +20,6 @@ runs:
       run: pnpm install --frozen-lockfile
     - name: Generate Prisma client
       shell: bash
-      run: pnpm --filter @template/database db:generate
+      run: pnpm --filter @qotaq/database db:generate
       env:
         DATABASE_URL: postgresql://user:password@localhost:5432/mock_db

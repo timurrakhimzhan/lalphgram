@@ -41,7 +41,7 @@ importers:
       '@eslint/js':
         specifier: 9.13.0
         version: 9.13.0
-      '@template/eslint-plugin':
+      '@qotaq/eslint-plugin':
         specifier: workspace:*
         version: link:packages/eslint-plugin
       '@types/node':
@@ -93,28 +93,6 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.11)(tsx@4.21.0)(yaml@2.8.2)
 
-  packages/claude-shim:
-    dependencies:
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: latest
-        version: 0.2.52(zod@4.3.6)
-      '@effect/platform':
-        specifier: latest
-        version: 0.94.5(effect@3.19.19)
-      '@effect/platform-node':
-        specifier: latest
-        version: 0.104.1(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(effect@3.19.19)
-      effect:
-        specifier: latest
-        version: 3.19.19
-      zod:
-        specifier: latest
-        version: 4.3.6
-    devDependencies:
-      '@effect/vitest':
-        specifier: latest
-        version: 0.27.0(effect@3.19.19)(vitest@3.2.4(@types/node@22.19.11)(tsx@4.21.0)(yaml@2.8.2))
-
   packages/eslint-plugin:
     dependencies:
       eslint:
@@ -123,6 +101,9 @@ importers:
 
   packages/notifications:
     dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: latest
+        version: 0.2.52(zod@4.3.6)
       '@effect/cli':
         specifier: latest
         version: 0.73.2(@effect/platform@0.94.5(effect@3.19.19))(@effect/printer-ansi@0.47.0(@effect/typeclass@0.38.0(effect@3.19.19))(effect@3.19.19))(@effect/printer@0.47.0(@effect/typeclass@0.38.0(effect@3.19.19))(effect@3.19.19))(effect@3.19.19)
@@ -138,9 +119,6 @@ importers:
       '@linear/sdk':
         specifier: latest
         version: 75.0.0(graphql@16.12.0)
-      '@template/claude-shim':
-        specifier: workspace:*
-        version: link:../claude-shim
       better-telegraph:
         specifier: ^2.1.1
         version: 2.1.1
@@ -153,6 +131,9 @@ importers:
       telegraf:
         specifier: latest
         version: 4.16.3
+      zod:
+        specifier: latest
+        version: 4.3.6
     publishDirectory: dist
 
 packages:

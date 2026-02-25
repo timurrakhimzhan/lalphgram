@@ -2,12 +2,12 @@ import * as effectEslint from "@effect/eslint-plugin"
 import { fixupPluginRules } from "@eslint/compat"
 import { FlatCompat } from "@eslint/eslintrc"
 import js from "@eslint/js"
+import * as qotaqPlugin from "@qotaq/eslint-plugin"
 import tsParser from "@typescript-eslint/parser"
 import codegen from "eslint-plugin-codegen"
 import _import from "eslint-plugin-import"
 import simpleImportSort from "eslint-plugin-simple-import-sort"
 import sortDestructureKeys from "eslint-plugin-sort-destructure-keys"
-import * as templatePlugin from "@template/eslint-plugin"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -35,7 +35,7 @@ export default [
       "sort-destructure-keys": sortDestructureKeys,
       "simple-import-sort": simpleImportSort,
       codegen,
-      "@template": templatePlugin
+      "@qotaq": qotaqPlugin
     },
 
     languageOptions: {
@@ -72,9 +72,9 @@ export default [
         message: "Don't use 'object' type. Use Record<string, unknown> or a specific type instead"
       }],
 
-      "@template/no-catch-all-recovery": "error",
-      "@template/no-silent-error-catch": "error",
-      "@template/no-effectful-function": "error",
+      "@qotaq/no-catch-all-recovery": "error",
+      "@qotaq/no-silent-error-catch": "error",
+      "@qotaq/no-effectful-function": "error",
 
       "no-unused-vars": "off",
       "prefer-rest-params": "off",
@@ -129,15 +129,15 @@ export default [
         }
       }],
 
-      "@template/no-direct-result-tag": "warn",
-      "@template/prefer-get-result": "warn"
+      "@qotaq/no-direct-result-tag": "warn",
+      "@qotaq/prefer-get-result": "warn"
     }
   },
   {
     files: ["**/test/**/*.ts"],
     rules: {
-      "@template/enforce-service-of-mock": "error",
-      "@template/no-effectful-function": "off"
+      "@qotaq/enforce-service-of-mock": "error",
+      "@qotaq/no-effectful-function": "off"
     }
   }
 ]

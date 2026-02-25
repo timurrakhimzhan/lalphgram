@@ -222,10 +222,20 @@ const parseInline = (text: string): Array<Node> => {
 // Block → Node conversion
 // ---------------------------------------------------------------------------
 
+const codeToChildren = (code: string): Array<Node> => {
+  const lines = code.split("\n")
+  const children: Array<Node> = []
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0) children.push({ tag: "br" })
+    children.push(lines[i] ?? "")
+  }
+  return children
+}
+
 const blockToNodes = (block: Block): Array<Node> => {
   switch (block._tag) {
     case "codeBlock":
-      return [{ tag: "pre", children: [{ tag: "code", children: [block.code] }] }]
+      return [{ tag: "pre", children: codeToChildren(block.code) }]
     case "heading": {
       const tag = block.level <= 2 ? "h3" : "h4"
       return [{ tag, children: parseInline(block.text) }]

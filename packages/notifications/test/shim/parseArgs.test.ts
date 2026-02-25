@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { parseArgs } from "../src/parseArgs.js"
+import { parseArgs } from "../../src/shim/parseArgs.js"
 
 describe("parseArgs", () => {
   it("extracts positional prompt", () => {

@@ -1,5 +1,6 @@
 {
-  "name": "@template/eslint-plugin",
+  "name": "@qotaq/eslint-plugin",
+  "private": true,
   "version": "1.0.0",
   "description": "Custom ESLint rules for template",
   "main": "src/index.js",

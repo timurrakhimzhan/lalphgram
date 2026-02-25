@@ -3,7 +3,7 @@ import shared from "./vitest.shared.js"
 
 const config: UserConfigExport = {
   test: {
-    projects: ["packages/notifications", "packages/eslint-plugin", "packages/claude-shim"]
+    projects: ["packages/notifications", "packages/eslint-plugin"]
   }
 }
 

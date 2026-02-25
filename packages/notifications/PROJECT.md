@@ -18,7 +18,7 @@ CLI via `@effect/cli` with options:
 **Startup flow**:
 1. Initialize `TelegramConfig` — prompt for bot token if missing
 2. Prompt for auto-merge settings (enabled, max wait minutes)
-3. Build `PlanCommandBuilder` — spawns `lalph plan` with PATH shimming to use claude-shim
+3. Build `PlanCommandBuilder` — spawns `lalph plan` with PATH shimming to use `src/shim/bin.ts`
 4. Build `MainLayer` with all services
 5. Wait for first Telegram message (to confirm chat ID)
 6. Run `EventLoop`
@@ -425,7 +425,7 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 - `mermaidToPlantUml(mermaid)` — Pure function converting Mermaid class diagram syntax to PlantUML. Handles `classDiagram`→`@startuml/@enduml`, `~generics~`→`<generics>`, method return type formatting, relationship arrows
 
 ### TelegraphMarkdown (`lib/TelegraphMarkdown.ts`)
-- `markdownToTelegraphNodes(md)` — Pure function converting markdown directly to Telegraph Node array. Two-phase parser: block-level state machine (code fences, headings h1/h2→h3 h3+→h4, HR, ul/ol lists, blockquotes, paragraphs) + recursive inline scanner (code, links, bold, italic, strikethrough). Skips lossy HTML intermediate step
+- `markdownToTelegraphNodes(md)` — Pure function converting markdown directly to Telegraph Node array. Two-phase parser: block-level state machine (code fences with `br` tags for line breaks instead of `\n`, headings h1/h2→h3 h3+→h4, HR, ul/ol lists, blockquotes, paragraphs) + recursive inline scanner (code, links, bold, italic, strikethrough). Skips lossy HTML intermediate step
 - `specFilesToTelegraphNodes(files)` — Converts `ReadonlyArray<SpecFile>` to Telegraph Node array. Adds file name as h3 heading per file, converts mermaid files to kroki.io PlantUML SVG `<img>` nodes (via `mermaidToPlantUml` + zlib deflate + base64url encoding), parses markdown files with `markdownToTelegraphNodes`
 
 ### TelegramFormatter (`lib/TelegramFormatter.ts`)
@@ -436,6 +436,34 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 - Decodes NDJSON from Claude's `--output-format stream-json`
 - Types: `StreamJsonMessage`, `ContentBlock`, `Question`, `AskUserQuestionInput`
 - `parseNdjsonMessages` for stream processing
+
+---
+
+## Claude Shim (`src/shim/`)
+
+SDK-based `claude` binary replacement bundled directly in this package (previously `@qotaq/claude-shim`). Streams NDJSON to stdout for `PlanSession` to parse. Uses MCP tool for `AskUserQuestion` instead of hooks.
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `shim/main.ts` | Core shim program — `shimProgram` effect, `ShimDeps`/`ClaudeQuery` services, `ShimError`, `ShimConfig` |
+| `shim/bin.ts` | Entry point — wires Node stdin/stdout/stderr and `query` from `@anthropic-ai/claude-agent-sdk` |
+| `shim/parseArgs.ts` | CLI argument parsing — extracts prompt, `--dangerously-skip-permissions`, `--model` |
+| `shim/schemas.ts` | Effect `Schema` definitions for shim control messages (`shim_start`, `shim_abort`, `shim_interrupt`, `shim_approve`, `follow_up`) |
+
+### Services
+
+- **ShimDeps** (`Context.Tag`) — IO dependencies: `args`, `stdin` (Stream), `stdout`/`stderr` (Sink)
+- **ClaudeQuery** (`Context.Tag`) — creates `Query` instances via `@anthropic-ai/claude-agent-sdk`
+- **ShimConfig** — `Config.all` reading `REAL_CLAUDE_PATH` and `CLAUDE_MODEL` env vars
+
+### Protocol
+
+1. Shim writes `{ type: "shim_ready" }` to stdout
+2. Parent sends `{ type: "shim_start" }` or `{ type: "shim_abort" }` via stdin
+3. SDK query streams `SDKMessage` NDJSON to stdout
+4. Parent can send `follow_up`, `shim_interrupt`, `shim_approve`, `shim_abort` via stdin
 
 ---
 

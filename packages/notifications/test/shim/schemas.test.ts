@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Either } from "effect"
-import { decodeShimMessage } from "../src/schemas.js"
+import { decodeShimMessage } from "../../src/shim/schemas.js"
 
 describe("decodeShimMessage", () => {
   it("decodes shim_start without text", () => {

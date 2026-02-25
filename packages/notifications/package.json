@@ -1,6 +1,6 @@
 {
-  "name": "@template/notifications",
-  "version": "0.0.0",
+  "name": "@qotaq/lalphgram",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "description": "Notification service for task tracker and GitHub events",
@@ -32,11 +32,12 @@
     "@effect/platform": "latest",
     "@effect/platform-node": "latest",
     "@linear/sdk": "latest",
-    "@template/claude-shim": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "latest",
     "better-telegraph": "^2.1.1",
     "effect": "latest",
     "octokit": "latest",
-    "telegraf": "latest"
+    "telegraf": "latest",
+    "zod": "latest"
   },
   "effect": {
     "generateExports": {

@@ -4,14 +4,12 @@
 
 | Package | Path | Purpose |
 |---|---|---|
-| `@template/notifications` | `packages/notifications` | Main app — polls GitHub/Linear, sends Telegram notifications, manages plan sessions with Claude |
-| `@template/claude-shim` | `packages/claude-shim` | SDK-based `claude` binary replacement — streams NDJSON to stdout, routes stdin control messages |
-| `@template/eslint-plugin` | `packages/eslint-plugin` | Custom ESLint rules for Effect-TS patterns |
+| `@qotaq/lalphgram` | `packages/notifications` | Main app — polls GitHub/Linear, sends Telegram notifications, manages plan sessions with Claude. Includes SDK-based claude shim at `src/shim/` |
+| `@qotaq/eslint-plugin` | `packages/eslint-plugin` | Custom ESLint rules for Effect-TS patterns |
 
 ## Dependency Graph
 
 ```
-notifications ──depends on──> claude-shim (workspace)
 notifications ──depends on──> eslint-plugin (dev, lint only)
 ```
 
@@ -22,7 +20,7 @@ The spec/analysis file detection pipeline spans three systems:
 ```
 lalph PromptGen (system prompt)
   ↓ tells Claude to write specs to .specs/ and plan.json
-claude-shim (passthrough)
+notifications/src/shim/ (SDK-based claude binary replacement)
   ↓ streams tool_use blocks with file_path as NDJSON
 notifications/PlanSession
   ↓ extracts file_path from Write/Edit/NotebookEdit tool_use blocks
@@ -35,7 +33,7 @@ notifications/EventLoop
 
 - **lalph** (`repos/lalph/src/PromptGen.ts` → `planPrompt`) — defines the `.specs/` directory and `plan.json` conventions in Claude's system prompt
 - **AnalysisPrompts** (`notifications/src/lib/AnalysisPrompts.ts`) — generates follow-up prompts instructing Claude to write `.specs/analysis.md`, sent as `follow_up` messages through the shim
-- **claude-shim** — pure passthrough; streams all SDK messages as NDJSON without inspecting file paths
+- **shim** (`notifications/src/shim/`) — pure passthrough; streams all SDK messages as NDJSON without inspecting file paths
 - **PlanSession** (`notifications/src/services/PlanSession.ts`) — pattern-matches `file_path` from tool_use blocks in the NDJSON stream, classifies into spec vs analysis files, emits typed events
 - **EventLoop** (`notifications/src/services/EventLoop.ts`) — reacts to events: sends Telegram notifications, triggers analysis follow-ups on `PlanSpecCreated`/`PlanSpecUpdated`
 
@@ -53,7 +51,7 @@ notifications/EventLoop
 | Script | What it does |
 |---|---|
 | `pnpm build` | Build all packages via Effect build-utils |
-| `pnpm check` | TypeScript type-check notifications + claude-shim |
+| `pnpm check` | TypeScript type-check notifications |
 | `pnpm lint` | ESLint across all src/test files |
 | `pnpm test` | Vitest across all packages |
 | `pnpm dev:notifications` | `LOG_LEVEL=DEBUG tsx` for notifications |
@@ -65,7 +63,7 @@ notifications/EventLoop
 
 lint-staged runs `eslint --fix` on staged `*.{ts,mjs}` files.
 
-## ESLint Rules (`@template/eslint-plugin`)
+## ESLint Rules (`@qotaq/eslint-plugin`)
 
 | Rule | Severity | Purpose |
 |---|---|---|
@@ -82,7 +80,7 @@ lint-staged runs `eslint --fix` on staged `*.{ts,mjs}` files.
 
 - `tsconfig.base.json` — Strict, ES2022, NodeNext, composite, incremental
 - `eslint.config.mjs` — Flat config with dprint, import sorting, custom rules
-- `vitest.config.ts` — Projects: notifications, eslint-plugin, claude-shim
+- `vitest.config.ts` — Projects: notifications, eslint-plugin
 - `vitest.shared.ts` — Shared: es2020, concurrent, @effect/vitest equality testers
 - `pnpm-workspace.yaml` — `packages/*`
 

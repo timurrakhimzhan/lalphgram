@@ -45,16 +45,16 @@
       }
     ],
     "paths": {
-      "@template/domain": [
+      "@qotaq/domain": [
         "packages/domain/src/index.ts"
       ],
-      "@template/database": [
+      "@qotaq/database": [
         "packages/database/src/index.ts"
       ],
-      "@template/server": [
+      "@qotaq/server": [
         "packages/server/src/index.ts"
       ],
-      "@template/notifications": [
+      "@qotaq/lalphgram": [
         "packages/notifications/src/index.ts"
       ]
     }
