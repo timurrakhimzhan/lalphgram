@@ -25,6 +25,7 @@ export interface GitHubCheckRun {
   readonly status: string
   readonly conclusion: string | null
   readonly html_url: string
+  readonly output: { readonly title: string | null; readonly summary: string | null } | null
 }
 
 /**
@@ -242,7 +243,8 @@ export const GitHubClientLive = Layer.effect(
             name: cr.name,
             status: cr.status,
             conclusion: cr.conclusion,
-            html_url: cr.htmlUrl
+            html_url: cr.htmlUrl,
+            output: cr.output
           }))
         })),
         Effect.mapError((err) =>

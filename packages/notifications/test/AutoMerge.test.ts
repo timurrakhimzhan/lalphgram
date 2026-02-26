@@ -132,7 +132,7 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
+          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
         })
       ),
       mergePR: vi.fn(() => Effect.succeed(undefined))
@@ -158,7 +158,7 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
+          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
         })
       )
     })
@@ -201,7 +201,7 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
+          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
         })
       ),
       mergePR: vi.fn(() => Effect.succeed(undefined))
@@ -227,7 +227,7 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
+          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
         })
       ),
       mergePR: vi.fn(() => Effect.fail(new GitHubClientError({ message: "Merge conflict", cause: null })))
@@ -262,6 +262,157 @@ describe("AutoMerge", () => {
     )
   })
 
+  it.live("merges PR when no CI checks are configured", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() => Effect.succeed({ state: "pending", checkRuns: [] })),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("merges PR when all checks are billing failures", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "failure",
+            html_url: "",
+            output: {
+              title: "Billing issue",
+              summary:
+                "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+            }
+          }]
+        })
+      ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("does not merge when billing failure mixed with real CI failure", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "",
+              output: {
+                title: "Billing issue",
+                summary:
+                  "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+              }
+            },
+            {
+              id: 2,
+              name: "lint",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "",
+              output: { title: "Lint failed", summary: "Found 3 errors" }
+            }
+          ]
+        })
+      ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.mergePR).not.toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("merges PR when billing failures mixed with passing checks", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "",
+              output: {
+                title: "Billing issue",
+                summary:
+                  "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+              }
+            },
+            {
+              id: 2,
+              name: "lint",
+              status: "completed",
+              conclusion: "success",
+              html_url: "",
+              output: null
+            }
+          ]
+        })
+      ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
+  })
+
   it.live("cleans up state for PRs no longer open", () => {
     // Arrange
     let callCount = 0
@@ -270,7 +421,7 @@ describe("AutoMerge", () => {
       .mockReturnValueOnce(Effect.succeed({ state: "pending", checkRuns: [] }))
       .mockReturnValueOnce(Effect.succeed({
         state: "success",
-        checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "" }]
+        checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
       }))
     const githubMock = makeGitHubClientMock({
       listOpenPRs: vi.fn(() => {

@@ -278,7 +278,8 @@ describe("GitHubClient", () => {
           name: "test-suite",
           status: "completed",
           conclusion: "success",
-          htmlUrl: "https://github.com/owner/my-repo/runs/1"
+          htmlUrl: "https://github.com/owner/my-repo/runs/1",
+          output: null
         }])
       )
     }

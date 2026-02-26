@@ -105,6 +105,7 @@ export interface OctokitCheckRun {
   readonly status: string
   readonly conclusion: string | null
   readonly htmlUrl: string
+  readonly output: { readonly title: string | null; readonly summary: string | null } | null
 }
 
 /**
@@ -548,7 +549,8 @@ export const OctokitClientLive = Layer.effect(
               name: cr.name,
               status: cr.status,
               conclusion: cr.conclusion ?? null,
-              htmlUrl: cr.html_url ?? ""
+              htmlUrl: cr.html_url ?? "",
+              output: cr.output ? { title: cr.output.title ?? null, summary: cr.output.summary ?? null } : null
             }))
           )
         )

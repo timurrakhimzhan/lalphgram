@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * lalph-notify CLI entry point — zero-config notification service using lalph project config
  * @since 1.0.0
@@ -5,7 +6,7 @@
 import { Command as CliCommand, Options, Prompt } from "@effect/cli"
 import { Command as PlatformCommand, FetchHttpClient, FileSystem, Path } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
-import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Stream } from "effect"
+import { Config, Console, Effect, Layer, Logger, LogLevel, Option, Schema, Stream } from "effect"
 import { fileURLToPath } from "node:url"
 import { AppContext, AppContextLive } from "./services/AppContext.js"
 import { AppRuntimeConfig, RuntimeConfig } from "./services/AppRuntimeConfig.js"
@@ -16,7 +17,7 @@ import { PlanCommandBuilder } from "./services/PlanSession.js"
 import { TelegramConfig, TelegramConfigLive, TelegramConfigSchema } from "./services/TelegramConfig.js"
 
 const lalphNotifyCommand = CliCommand.make(
-  "lalph-notify",
+  "lalphgram",
   {
     interval: Options.integer("interval").pipe(
       Options.withDefault(30),
@@ -155,9 +156,14 @@ const lalphNotifyCommand = CliCommand.make(
     })
 ).pipe(CliCommand.withDescription("Zero-config notification service using lalph project config"))
 
-const cli = CliCommand.run(lalphNotifyCommand, {
-  name: "lalph-notify",
-  version: "1.0.0"
+const PackageJsonVersion = Schema.Struct({ version: Schema.String })
+
+const readVersion = Effect.gen(function*() {
+  const fs = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
+  const dir = pathService.dirname(fileURLToPath(import.meta.url))
+  const content = yield* fs.readFileString(pathService.join(dir, "..", "..", "package.json"))
+  return Schema.decodeUnknownSync(PackageJsonVersion)(JSON.parse(content)).version
 })
 
 const logLevelLayer = Layer.unwrapEffect(
@@ -167,7 +173,14 @@ const logLevelLayer = Layer.unwrapEffect(
   )
 )
 
-Effect.suspend(() => cli(process.argv)).pipe(
+Effect.gen(function*() {
+  const version = yield* readVersion
+  const cli = CliCommand.run(lalphNotifyCommand, {
+    name: "lalphgram",
+    version
+  })
+  yield* Effect.suspend(() => cli(process.argv))
+}).pipe(
   Effect.provide(TelegramConfigLive),
   Effect.provide(AppContextLive),
   Effect.provide(FetchHttpClient.layer),

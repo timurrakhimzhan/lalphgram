@@ -1,6 +1,6 @@
 {
   "name": "@qotaq/lalphgram",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "type": "module",
   "license": "MIT",
   "description": "Notification service for task tracker and GitHub events",
@@ -9,17 +9,22 @@
     "url": "<PLACEHOLDER>",
     "directory": "packages/notifications"
   },
+  "bin": {
+    "lalphgram": "./dist/esm/Main.js"
+  },
   "publishConfig": {
     "access": "public",
     "directory": "dist"
   },
   "scripts": {
     "codegen": "build-utils prepare-v2",
-    "build": "pnpm build-esm && pnpm build-annotate && pnpm build-cjs && build-utils pack-v2",
+    "build": "pnpm build-esm && pnpm build-annotate && pnpm build-cjs && build-utils pack-v2 && chmod +x dist/dist/esm/Main.js",
     "build-esm": "tsc -b tsconfig.build.json",
     "build-cjs": "babel build/esm --plugins @babel/transform-export-namespace-from --plugins @babel/transform-modules-commonjs --out-dir build/cjs --source-maps",
     "build-annotate": "babel build/esm --plugins annotate-pure-calls --out-dir build/esm --source-maps",
     "check": "tsc -b tsconfig.json",
+    "lint": "eslint \"**/{src,test,examples,scripts,dtslint}/**/*.{ts,mjs}\"",
+    "lint:fix": "pnpm lint --fix",
     "dev": "LOG_LEVEL=DEBUG tsx src/Main.ts",
     "start": "node build/esm/Main.js",
     "test": "vitest",

@@ -97,6 +97,7 @@ const makeGitHubClientMock = (overrides: Partial<{
       status: string
       conclusion: string | null
       html_url: string
+      output: { title: string | null; summary: string | null } | null
     }>
   }, GitHubClientError>
   postComment: (repo: GitHubRepo, prNumber: number, body: string) => Effect.Effect<void, GitHubClientError>
@@ -414,8 +415,15 @@ describe("PullRequestTracker", () => {
         Effect.succeed({
           state: "failure",
           checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "https://example.com/run/1" },
-            { id: 2, name: "lint", status: "completed", conclusion: "success", html_url: "" }
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "https://example.com/run/1",
+              output: null
+            },
+            { id: 2, name: "lint", status: "completed", conclusion: "success", html_url: "", output: null }
           ]
         })
       ),
@@ -449,7 +457,7 @@ describe("PullRequestTracker", () => {
         Effect.succeed({
           state: "failure",
           checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
+            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "", output: null }
           ]
         })
       ),
@@ -484,7 +492,7 @@ describe("PullRequestTracker", () => {
         Effect.succeed({
           state: "failure",
           checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "" }
+            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "", output: null }
           ]
         })
       ),

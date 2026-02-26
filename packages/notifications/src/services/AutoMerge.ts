@@ -43,11 +43,31 @@ const makeRepoFromFullName = (fullName: string) =>
     html_url: ""
   })
 
-const isCISuccess = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
-  if (checkRuns.length === 0) return state === "success"
-  const allChecksCompleted = Array.every(checkRuns, (cr) => cr.conclusion !== null)
-  const allChecksPassed = Array.every(checkRuns, (cr) => cr.conclusion === "success" || cr.conclusion === "skipped")
-  return allChecksCompleted && allChecksPassed && state !== "failure"
+const isBillingFailure = (checkRun: {
+  readonly conclusion: string | null
+  readonly output: { readonly summary: string | null } | null
+}) =>
+  checkRun.conclusion === "failure" &&
+  checkRun.output?.summary !== null &&
+  checkRun.output?.summary !== undefined &&
+  (checkRun.output.summary.includes("account payments have failed") ||
+    checkRun.output.summary.includes("spending limit"))
+
+const isCISuccess = (
+  state: string,
+  checkRuns: ReadonlyArray<{
+    readonly conclusion: string | null
+    readonly output: { readonly summary: string | null } | null
+  }>
+) => {
+  const nonBillingRuns = Array.filter(checkRuns, (cr) => !isBillingFailure(cr))
+  if (nonBillingRuns.length === 0) return state !== "failure" || checkRuns.length > 0
+  const allChecksCompleted = Array.every(nonBillingRuns, (cr) => cr.conclusion !== null)
+  const allChecksPassed = Array.every(
+    nonBillingRuns,
+    (cr) => cr.conclusion === "success" || cr.conclusion === "skipped"
+  )
+  return allChecksCompleted && allChecksPassed
 }
 
 /**
