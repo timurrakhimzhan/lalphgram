@@ -250,6 +250,7 @@ export const PlanSessionLive = Layer.scoped(
 
         yield* Stream.fromQueue(stdinQueue).pipe(
           Stream.run(process.stdin),
+          Effect.tap(() => Effect.log("stdin stream closed")),
           Effect.catchAll((err) => Effect.logError(`stdin write error: ${String(err)}`)),
           Effect.forkDaemon
         )
@@ -439,6 +440,7 @@ export const PlanSessionLive = Layer.scoped(
         )
 
         yield* Effect.gen(function*() {
+          yield* Effect.log("Waiting for process exit code...")
           const exitCode = yield* process.exitCode
           yield* Effect.log("Plan session process exited").pipe(
             Effect.annotateLogs({ exitCode: String(exitCode) })
@@ -519,7 +521,12 @@ export const PlanSessionLive = Layer.scoped(
       }
       const encoder = new TextEncoder()
       yield* Ref.set(idleRef, false)
-      yield* Queue.offer(current.value.stdinQueue, encoder.encode(JSON.stringify({ type: "shim_approve" }) + "\n"))
+      const payload = JSON.stringify({ type: "shim_approve" }) + "\n"
+      yield* Effect.log("Sending shim_approve to stdin").pipe(
+        Effect.annotateLogs({ payload: payload.trim() })
+      )
+      yield* Queue.offer(current.value.stdinQueue, encoder.encode(payload))
+      yield* Effect.log("shim_approve queued to stdin")
     })
 
     const reject = Effect.gen(function*() {

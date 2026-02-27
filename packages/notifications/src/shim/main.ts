@@ -162,7 +162,10 @@ export const shimProgram = Effect.gen(function*() {
           }
           case "shim_approve": {
             yield* writeDebug("shim_approve intercepted")
-            yield* Queue.offer(followUpQueue, FollowUpStop)
+            // Exit immediately — scope cleanup hangs because the stdin
+            // reader fiber is blocked on a Node.js pipe read that
+            // doesn't respond to Effect's fiber interruption.
+            yield* Effect.sync(() => process.exit(0))
             return
           }
           case "shim_start": {

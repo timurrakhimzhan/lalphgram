@@ -302,6 +302,15 @@ export const chatMachine = Machine.make(
       analysisFollowUpSent: boolean
     ): Effect.Effect<ChatState, never, never> =>
       Effect.gen(function*() {
+        yield* Effect.log("checkAllReady").pipe(
+          Effect.annotateLogs({
+            spec: String(flags.spec),
+            analysis: String(flags.analysis),
+            idle: String(flags.idle),
+            planType,
+            analysisFollowUpSent: String(analysisFollowUpSent)
+          })
+        )
         if (!flags.spec || !flags.analysis || !flags.idle) {
           return ChatState.SessionRunning({
             projectId,
@@ -660,11 +669,10 @@ export const chatMachine = Machine.make(
             case "SpecReady": {
               if (text === APPROVE_BUTTON_LABEL) {
                 yield* Effect.log("User approved task creation")
-                yield* planSession.approve.pipe(
-                  Effect.tapError((err) => Effect.logError(`Plan approve error: ${err.message}`)),
+                yield* planSession.approve
+                yield* notifier.sendMessage({ text: "Spec approved.", replyKeyboard: IDLE_KEYBOARD }).pipe(
                   Effect.orElseSucceed(() => undefined)
                 )
-                yield* notifier.sendMessage({ text: "Spec approved.", replyKeyboard: IDLE_KEYBOARD })
                 return reply(ChatState.Idle())
               }
               if (text === ABORT_BUTTON_LABEL) {
