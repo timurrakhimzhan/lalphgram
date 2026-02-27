@@ -152,7 +152,7 @@ export class PlanCommandBuilder extends Context.Tag("PlanCommandBuilder")<
 
 const stripAnsi = (text: string): string =>
   // eslint-disable-next-line no-control-regex
-  text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+  text.replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, "")
 
 const WriteToolInput = Schema.Struct({ file_path: Schema.String })
 const EditToolInput = Schema.Struct({ file_path: Schema.String })
@@ -398,6 +398,8 @@ export const PlanSessionLive = Layer.scoped(
               Effect.annotateLogs({ chunkLength: String(chunk.length), preview: chunk.slice(0, 200) })
             )
           ),
+          Stream.map(stripAnsi),
+          Stream.map((text) => text.replace(/\r/g, "\n")),
           parseNdjsonMessages,
           Stream.mapEffect(routeMessage),
           Stream.runDrain,

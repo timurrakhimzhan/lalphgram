@@ -87,10 +87,12 @@ const autoMergeLayer = AutoMergeLive.pipe(
   Layer.provide(lalphConfigLayer)
 )
 
-const eventSourcesLayer = PullRequestTrackerLive.pipe(
-  Layer.provide(servicesLayer),
-  Layer.provide(lalphConfigLayer)
-)
+const eventSourcesLayer = process.env["MOCK_GITHUB"] === "1"
+  ? Layer.succeed(PullRequestTracker, { eventStream: Stream.never })
+  : PullRequestTrackerLive.pipe(
+    Layer.provide(servicesLayer),
+    Layer.provide(lalphConfigLayer)
+  )
 
 const branchParserLayer = BranchParserLive
 

@@ -74,18 +74,22 @@ const lalphNotifyCommand = CliCommand.make(
             Effect.map((s) => s.trim())
           )
 
-          // Resolve tsx binary for running the TypeScript shim
-          const tsxPath = yield* PlatformCommand.make("which", "tsx").pipe(
-            PlatformCommand.string,
-            Effect.map((s) => s.trim())
-          )
-
-          // Resolve the SDK-based shim entry point relative to this file
-          const shimMainTs = pathService.join(
+          // Resolve the SDK-based shim entry point relative to this file.
+          // In dev mode (tsx), the file is bin.ts; when built, it's bin.js.
+          const shimDir_ = pathService.join(
             pathService.dirname(fileURLToPath(import.meta.url)),
-            "shim",
-            "bin.ts"
+            "shim"
           )
+          const shimJsExists = yield* fs.exists(pathService.join(shimDir_, "bin.js"))
+          const shimMainTs = pathService.join(shimDir_, shimJsExists ? "bin.js" : "bin.ts")
+
+          // Use node for compiled JS, tsx for TypeScript source
+          const tsxPath = shimJsExists
+            ? process.execPath
+            : yield* PlatformCommand.make("which", "tsx").pipe(
+              PlatformCommand.string,
+              Effect.map((s) => s.trim())
+            )
 
           yield* Effect.log("Resolved shim paths").pipe(
             Effect.annotateLogs({ realClaudePath, tsxPath, shimMainTs })

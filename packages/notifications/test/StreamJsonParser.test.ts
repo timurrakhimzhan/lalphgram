@@ -117,5 +117,29 @@ describe("StreamJsonParser", () => {
         expect(result).toHaveLength(1)
         expect(result[0]!.type).toBe("system")
       }))
+
+    it.effect("parses JSON when ANSI codes and \\r precede it in the same chunk", () =>
+      Effect.gen(function*() {
+        // Arrange — simulates prompt UI writing ANSI + \r before shim_ready JSON
+        const stripAnsi = (text: string): string =>
+          // eslint-disable-next-line no-control-regex
+          text.replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, "")
+        const ansiPromptOutput = "\x1b[2K\x1b[1G? Select a project: \x1b[36m› test-project\x1b[39m\r"
+        const shimReady = `{"type":"shim_ready"}\n`
+        const rawChunk = ansiPromptOutput + shimReady
+
+        // Act — apply the same pipeline as PlanSession: stripAnsi → replace \r → parse
+        const result = yield* Stream.make(rawChunk).pipe(
+          Stream.map(stripAnsi),
+          Stream.map((text) => text.replace(/\r/g, "\n")),
+          parseNdjsonMessages,
+          Stream.runCollect,
+          Effect.map((chunk) => [...chunk])
+        )
+
+        // Assert
+        expect(result).toHaveLength(1)
+        expect(result[0]!.type).toBe("shim_ready")
+      }))
   })
 })
