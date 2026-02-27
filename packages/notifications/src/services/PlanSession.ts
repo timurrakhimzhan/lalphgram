@@ -109,7 +109,11 @@ interface ActiveSession {
  * @category services
  */
 export interface PlanSessionService {
-  readonly start: (planText: string, projectId?: string | undefined) => Effect.Effect<void, PlanSessionError>
+  readonly start: (
+    planText: string,
+    projectId?: string | undefined,
+    labelFilter?: string | undefined
+  ) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly interrupt: (text: string) => Effect.Effect<void, PlanSessionError>
@@ -196,7 +200,7 @@ export const PlanSessionLive = Layer.scoped(
 
     yield* Effect.addFinalizer(() => closeActiveSession)
 
-    const start = (planText: string, projectId?: string | undefined) =>
+    const start = (planText: string, projectId?: string | undefined, labelFilter?: string | undefined) =>
       Effect.gen(function*() {
         const current = yield* Ref.get(sessionRef)
         if (Option.isSome(current)) {
@@ -251,8 +255,9 @@ export const PlanSessionLive = Layer.scoped(
         if (projectId != null) {
           const encoder = new TextEncoder()
           yield* Queue.offer(stdinQueue, encoder.encode(projectId + "\n"))
-          yield* Effect.log("Pre-answered project prompt").pipe(
-            Effect.annotateLogs({ projectId })
+          yield* Queue.offer(stdinQueue, encoder.encode((labelFilter ?? "") + "\n"))
+          yield* Effect.log("Pre-answered project and label prompts").pipe(
+            Effect.annotateLogs({ projectId, labelFilter: labelFilter ?? "(empty)" })
           )
         }
 

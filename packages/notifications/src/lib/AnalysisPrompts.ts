@@ -13,6 +13,7 @@ export const getAnalysisPrompt = (planType: string): string => {
   switch (planType) {
     case "Feature":
       return `\
+
 Now analyze the spec you just wrote. Create the following files:
 
 1. \`.specs/analysis.md\` — high-level design summary in plain text:
@@ -28,6 +29,7 @@ Now analyze the spec you just wrote. Create the following files:
    - **Act**: the single effect/function call under test
    - **Assert**: expected outcome and why this case matters
 
+Be extremely concise. Sacrifice grammar for the sake of concision.
 Do NOT display file contents in your response. The system will send them to the user.`
     case "Bug":
       return `\

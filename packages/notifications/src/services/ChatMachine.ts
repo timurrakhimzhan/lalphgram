@@ -471,11 +471,15 @@ export const chatMachine = Machine.make(
                 yield* Effect.log("Plan collection done, starting session").pipe(
                   Effect.annotateLogs("planText", joinedText)
                 )
-                const totalProjects = yield* projectStore.listProjects.pipe(
-                  Effect.map((ps) => ps.length),
-                  Effect.orElseSucceed(() => 1)
+                const projects = yield* projectStore.listProjects.pipe(
+                  Effect.orElseSucceed((): ReadonlyArray<{ id: string; labelFilter: string }> => [])
                 )
-                yield* planSession.start(joinedText, totalProjects > 1 ? state.projectId : undefined).pipe(
+                const currentProject = projects.find((p) => p.id === state.projectId)
+                yield* planSession.start(
+                  joinedText,
+                  projects.length > 1 ? state.projectId : undefined,
+                  projects.length > 1 ? currentProject?.labelFilter : undefined
+                ).pipe(
                   Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
                   Effect.orElseSucceed(() => undefined)
                 )

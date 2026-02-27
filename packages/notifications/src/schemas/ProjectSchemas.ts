@@ -14,5 +14,6 @@ export class LalphProject extends Schema.Class<LalphProject>("LalphProject")({
   targetBranch: Schema.Option(Schema.String),
   concurrency: Schema.Int.pipe(Schema.positive()),
   gitFlow: Schema.Literal("pr", "commit"),
-  reviewAgent: Schema.Boolean
+  reviewAgent: Schema.Boolean,
+  labelFilter: Schema.optionalWith(Schema.String, { default: () => "lalph" })
 }) {}
