@@ -93,7 +93,7 @@ export default [
       }],
 
       "@typescript-eslint/member-delimiter-style": 0,
-      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/no-empty-object-type": "error",
       "@typescript-eslint/no-wrapper-object-types": "error",
       "@typescript-eslint/no-explicit-any": "error",
@@ -137,7 +137,8 @@ export default [
     files: ["**/test/**/*.ts"],
     rules: {
       "@qotaq/enforce-service-of-mock": "error",
-      "@qotaq/no-effectful-function": "off"
+      "@qotaq/no-effectful-function": "off",
+      "@typescript-eslint/no-non-null-assertion": "off"
     }
   }
 ]

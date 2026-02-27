@@ -46,7 +46,14 @@ const SPEC_READY_KEYBOARD = [{ label: APPROVE_BUTTON_LABEL }, { label: ABORT_BUT
 
 // ── State types ──────────────────────────────────────────────────
 
-type CreatingProjectStep = "Name" | "Concurrency" | "TargetBranch" | "GitFlow" | "ReviewAgent"
+type CreatingProjectStep =
+  | "Name"
+  | "Concurrency"
+  | "TargetBranch"
+  | "GitFlow"
+  | "ReviewAgent"
+  | "LabelFilter"
+  | "AutoMergeLabel"
 
 interface CreatingProjectData {
   readonly name?: string
@@ -54,6 +61,8 @@ interface CreatingProjectData {
   readonly targetBranch?: string | null
   readonly gitFlow?: "pr" | "commit"
   readonly reviewAgent?: boolean
+  readonly labelFilter?: string
+  readonly autoMergeLabel?: string
 }
 
 export class ReadyFlags extends Data.Class<{
@@ -381,14 +390,15 @@ export const chatMachine = Machine.make(
                   return reply(state)
                 }
                 if (projects.length === 1) {
+                  const singleProject = projects[0] ?? { id: "" }
                   yield* Effect.log("Single project auto-selected").pipe(
-                    Effect.annotateLogs("projectId", projects[0]!.id)
+                    Effect.annotateLogs("projectId", singleProject.id)
                   )
                   yield* notifier.sendMessage({
                     text: "What type of change?",
                     options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
                   })
-                  return reply(ChatState.SelectingPlanType({ projectId: projects[0]!.id }))
+                  return reply(ChatState.SelectingPlanType({ projectId: singleProject.id }))
                 }
                 yield* notifier.sendMessage({
                   text: "Select a project:",
@@ -763,24 +773,62 @@ export const chatMachine = Machine.make(
                 }
                 case "ReviewAgent": {
                   const reviewAgent = text === "Yes"
-                  const data = state.data
+                  yield* notifier.sendMessage({
+                    text: "Label filter (for issue filtering):",
+                    options: [
+                      { label: "lalph" },
+                      { label: "Skip" },
+                      { label: ABORT_BUTTON_LABEL }
+                    ]
+                  })
+                  return reply(ChatState.CreatingProject({
+                    ...state,
+                    step: "LabelFilter",
+                    data: { ...state.data, reviewAgent }
+                  }))
+                }
+                case "LabelFilter": {
+                  const labelFilter = text === "Skip" ? "" : text
+                  yield* notifier.sendMessage({
+                    text: "Auto-merge label:",
+                    options: [
+                      { label: "auto-merge" },
+                      { label: "Skip" },
+                      { label: ABORT_BUTTON_LABEL }
+                    ]
+                  })
+                  return reply(ChatState.CreatingProject({
+                    ...state,
+                    step: "AutoMergeLabel",
+                    data: { ...state.data, labelFilter }
+                  }))
+                }
+                case "AutoMergeLabel": {
+                  const autoMergeLabel = text === "Skip" ? "" : text
+                  const data = { ...state.data, autoMergeLabel }
+                  const name = data.name ?? ""
+                  const concurrency = data.concurrency ?? 1
+                  const gitFlow = data.gitFlow ?? "pr"
+                  const reviewAgent = data.reviewAgent ?? false
                   yield* projectStore.createProject({
-                    id: data.name!,
+                    id: name,
                     targetBranch: data.targetBranch != null ? Option.some(data.targetBranch) : Option.none(),
-                    concurrency: data.concurrency!,
-                    gitFlow: data.gitFlow!,
-                    reviewAgent
+                    concurrency,
+                    gitFlow,
+                    reviewAgent,
+                    ...(data.labelFilter != null ? { labelFilter: data.labelFilter } : {}),
+                    ...(data.autoMergeLabel != null ? { autoMergeLabel: data.autoMergeLabel } : {})
                   }).pipe(
                     Effect.tapError((err) => notifier.sendMessage(`Failed to create project: ${err.message}`)),
                     Effect.orElseSucceed(() => undefined)
                   )
-                  yield* notifier.sendMessage(`Project <b>${data.name!}</b> created.`)
+                  yield* notifier.sendMessage(`Project <b>${name}</b> created.`)
                   if (state.continueWithPlan) {
                     yield* notifier.sendMessage({
                       text: "What type of change?",
                       options: [...PLAN_TYPE_LABELS.map((label) => ({ label })), { label: ABORT_BUTTON_LABEL }]
                     })
-                    return reply(ChatState.SelectingPlanType({ projectId: data.name! }))
+                    return reply(ChatState.SelectingPlanType({ projectId: name }))
                   }
                   yield* notifier.sendMessage({ text: "Ready.", replyKeyboard: IDLE_KEYBOARD })
                   return reply(ChatState.Idle())

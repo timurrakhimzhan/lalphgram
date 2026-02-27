@@ -1716,6 +1716,12 @@ describe("project creation wizard", () => {
       yield* flush
       // ReviewAgent
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Yes", from: "user" }))
+      yield* flush
+      // LabelFilter
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "lalph", from: "user" }))
+      yield* flush
+      // AutoMergeLabel
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "auto-merge", from: "user" }))
       yield* Queue.shutdown(queue)
       yield* flush
 
@@ -1733,12 +1739,20 @@ describe("project creation wizard", () => {
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({ text: "Enable review agent?" })
       )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Label filter (for issue filtering):" })
+      )
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Auto-merge label:" })
+      )
       expect(projectStoreMock.createProject).toHaveBeenCalledWith(
         expect.objectContaining({
           id: "my-project",
           concurrency: 2,
           gitFlow: "pr",
-          reviewAgent: true
+          reviewAgent: true,
+          labelFilter: "lalph",
+          autoMergeLabel: "auto-merge"
         })
       )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
@@ -1803,7 +1817,7 @@ describe("project creation wizard", () => {
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: NEW_PROJECT_BUTTON_LABEL, from: "user" }))
       yield* flush
-      // Wizard: Name → Concurrency → TargetBranch → GitFlow → ReviewAgent
+      // Wizard: Name → Concurrency → TargetBranch → GitFlow → ReviewAgent → LabelFilter → AutoMergeLabel
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "new-proj", from: "user" }))
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "1", from: "user" }))
@@ -1813,6 +1827,10 @@ describe("project creation wizard", () => {
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Commit", from: "user" }))
       yield* flush
       yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "No", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Skip", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Skip", from: "user" }))
       yield* Queue.shutdown(queue)
       yield* flush
 

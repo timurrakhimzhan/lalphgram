@@ -144,7 +144,8 @@ const lalphNotifyCommand = CliCommand.make(
             Stream.take(1),
             Stream.runCollect
           )
-          const firstMsg = [...messages][0]!
+          const firstMsg = [...messages][0]
+          if (firstMsg == null) return
           yield* store.set(new TelegramConfigSchema({ botToken, chatId: firstMsg.chatId }))
           yield* Console.log("Telegram config saved.")
         }

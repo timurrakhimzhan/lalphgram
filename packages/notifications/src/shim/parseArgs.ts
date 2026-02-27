@@ -20,7 +20,7 @@ export function parseArgs(args: ReadonlyArray<string>): ParsedArgs {
       skipNext = false
       continue
     }
-    const arg = args[i]!
+    const arg = args[i] ?? ""
     if (arg === "--dangerously-skip-permissions") {
       dangerouslySkipPermissions = true
     } else if (arg === "--output-format") {

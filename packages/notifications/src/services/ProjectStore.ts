@@ -30,6 +30,8 @@ export interface ProjectStoreService {
     readonly concurrency: number
     readonly gitFlow: "pr" | "commit"
     readonly reviewAgent: boolean
+    readonly labelFilter?: string
+    readonly autoMergeLabel?: string
   }) => Effect.Effect<LalphProject, ProjectStoreError>
 }
 
@@ -105,6 +107,8 @@ export const ProjectStoreLive = Layer.effect(
       readonly concurrency: number
       readonly gitFlow: "pr" | "commit"
       readonly reviewAgent: boolean
+      readonly labelFilter?: string
+      readonly autoMergeLabel?: string
     }) =>
       Effect.gen(function*() {
         const allProjects = yield* readProjects
@@ -114,7 +118,9 @@ export const ProjectStoreLive = Layer.effect(
           targetBranch: data.targetBranch,
           concurrency: data.concurrency,
           gitFlow: data.gitFlow,
-          reviewAgent: data.reviewAgent
+          reviewAgent: data.reviewAgent,
+          ...(data.labelFilter != null ? { labelFilter: data.labelFilter } : {}),
+          ...(data.autoMergeLabel != null ? { autoMergeLabel: data.autoMergeLabel } : {})
         })
         const updated = [...allProjects, newProject]
         const encoded = yield* Schema.encode(ProjectsArray)(updated).pipe(
