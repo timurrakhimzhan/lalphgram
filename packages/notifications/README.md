@@ -1,6 +1,6 @@
 # @qotaq/lalphgram
 
-Event-driven notification service that bridges GitHub, Linear, and Telegram. Polls for PR and task changes, sends real-time Telegram alerts, auto-merges PRs, and manages interactive Claude plan sessions — all from a single CLI command.
+Telegram interface for planning and managing [lalph](https://github.com/nicholasgriffintn/lalph) tasks with Claude Code. Draft specs, review architecture diagrams, and approve plans — all from your phone. Also includes PR notifications, auto-merge, and task tracking as extras.
 
 ## Install
 
@@ -16,10 +16,8 @@ npx @qotaq/lalphgram
 
 ## Prerequisites
 
+- [lalph](https://github.com/nicholasgriffintn/lalph) set up in your project
 - A [Telegram bot token](https://core.telegram.org/bots#how-do-i-create-a-bot) (you'll be prompted on first run)
-- A GitHub personal access token stored in `~/.lalph/config/`
-- (Optional) A Linear API token for issue tracking
-- A `.lalph/` directory in your project root (lalph project config)
 
 ## Usage
 
@@ -47,20 +45,6 @@ After setup, the event loop starts automatically.
 
 ## What It Does
 
-### Notifications
-
-- **New PRs** — alerts when PRs are opened
-- **Merge conflicts** — detects conflicts and posts a GitHub comment + Telegram alert
-- **CI failures** — reports failed checks with names
-- **New tasks** — notifies on Linear/GitHub issue creation and state changes
-- **PR comments** — routes to configurable comment timer for issue triage
-
-### Auto-Merge
-
-When enabled, monitors PRs and merges them automatically once:
-- All CI checks pass
-- A configurable cooldown period has elapsed since the last push
-
 ### Interactive Plan Sessions
 
 Manage Claude coding plans directly from Telegram:
@@ -71,9 +55,17 @@ Manage Claude coding plans directly from Telegram:
 4. Review specs via Telegraph link → **Approve** or **Abort**
 5. Ask follow-up questions or interrupt at any point
 
-## Architecture
+### Notifications
 
-Built with [Effect-TS](https://effect.website) — services use `Context.Tag` for dependency injection, `Stream` for event processing, and `Layer` for composition. The entire system runs as a single long-lived process with concurrent polling fibers.
+- **New PRs** — alerts when PRs are opened
+- **Merge conflicts** — detects conflicts and posts a GitHub comment + Telegram alert
+- **New tasks** — notifies on Linear/GitHub issue creation and state changes
+
+### Auto-Merge
+
+When enabled, monitors PRs and merges them automatically once:
+- All CI checks pass
+- A configurable cooldown period has elapsed since the last push
 
 ## License
 

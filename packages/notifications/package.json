@@ -1,6 +1,6 @@
 {
   "name": "@qotaq/lalphgram",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "license": "MIT",
   "description": "Notification service for task tracker and GitHub events",
