@@ -632,7 +632,7 @@ describe("multi-step plan input", () => {
       yield* flush
 
       // Assert
-      expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT", undefined, undefined)
+      expect(planSessionMock.start).toHaveBeenCalledWith("Add auth\nUse JWT", undefined, undefined, undefined)
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Planning started...",
@@ -1685,7 +1685,7 @@ describe("project selection", () => {
       yield* flush
 
       // Assert — projectId passed since >1 projects
-      expect(planSessionMock.start).toHaveBeenCalledWith("my plan", "project-a", "lalph")
+      expect(planSessionMock.start).toHaveBeenCalledWith("my plan", "project-a", "lalph", "auto-merge")
     }))
 })
 

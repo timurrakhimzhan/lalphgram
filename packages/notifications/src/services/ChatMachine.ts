@@ -472,13 +472,16 @@ export const chatMachine = Machine.make(
                   Effect.annotateLogs("planText", joinedText)
                 )
                 const projects = yield* projectStore.listProjects.pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<{ id: string; labelFilter: string }> => [])
+                  Effect.orElseSucceed((): ReadonlyArray<
+                    { id: string; labelFilter: string; autoMergeLabel: string }
+                  > => [])
                 )
                 const currentProject = projects.find((p) => p.id === state.projectId)
                 yield* planSession.start(
                   joinedText,
                   projects.length > 1 ? state.projectId : undefined,
-                  projects.length > 1 ? currentProject?.labelFilter : undefined
+                  projects.length > 1 ? currentProject?.labelFilter : undefined,
+                  projects.length > 1 ? currentProject?.autoMergeLabel : undefined
                 ).pipe(
                   Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
                   Effect.orElseSucceed(() => undefined)

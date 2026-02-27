@@ -112,7 +112,8 @@ export interface PlanSessionService {
   readonly start: (
     planText: string,
     projectId?: string | undefined,
-    labelFilter?: string | undefined
+    labelFilter?: string | undefined,
+    autoMergeLabel?: string | undefined
   ) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
@@ -200,7 +201,12 @@ export const PlanSessionLive = Layer.scoped(
 
     yield* Effect.addFinalizer(() => closeActiveSession)
 
-    const start = (planText: string, projectId?: string | undefined, labelFilter?: string | undefined) =>
+    const start = (
+      planText: string,
+      projectId?: string | undefined,
+      labelFilter?: string | undefined,
+      autoMergeLabel?: string | undefined
+    ) =>
       Effect.gen(function*() {
         const current = yield* Ref.get(sessionRef)
         if (Option.isSome(current)) {
@@ -256,8 +262,13 @@ export const PlanSessionLive = Layer.scoped(
           const encoder = new TextEncoder()
           yield* Queue.offer(stdinQueue, encoder.encode(projectId + "\n"))
           yield* Queue.offer(stdinQueue, encoder.encode((labelFilter ?? "") + "\n"))
-          yield* Effect.log("Pre-answered project and label prompts").pipe(
-            Effect.annotateLogs({ projectId, labelFilter: labelFilter ?? "(empty)" })
+          yield* Queue.offer(stdinQueue, encoder.encode((autoMergeLabel ?? "") + "\n"))
+          yield* Effect.log("Pre-answered project prompts").pipe(
+            Effect.annotateLogs({
+              projectId,
+              labelFilter: labelFilter ?? "(empty)",
+              autoMergeLabel: autoMergeLabel ?? "(empty)"
+            })
           )
         }
 
