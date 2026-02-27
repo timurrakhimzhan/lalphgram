@@ -32,6 +32,7 @@ import {
   runEventLoop
 } from "../src/services/EventLoop.js"
 import { GitHubClient } from "../src/services/GitHubClient.js"
+import { LalphConfig } from "../src/services/LalphConfig.js"
 import {
   IncomingMessage,
   MessengerAdapter,
@@ -281,6 +282,17 @@ const makeTestLayer = (
       Layer.succeed(AppRuntimeConfig, testRuntimeConfig),
       Layer.succeed(OctokitClient, octokitClientMock),
       Layer.succeed(PlanOverviewUploader, planOverviewUploaderMock),
+      Layer.succeed(
+        LalphConfig,
+        LalphConfig.of({
+          githubToken: Effect.succeed("test-token"),
+          linearToken: Effect.succeed("test-linear-token"),
+          issueSource: "github",
+          specUploader: "gist",
+          repoFullName: "owner/repo",
+          linearProjectIds: []
+        })
+      ),
       BranchParserLive
     ),
     messengerMock,

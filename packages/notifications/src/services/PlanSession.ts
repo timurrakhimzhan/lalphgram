@@ -88,6 +88,12 @@ export class PlanAwaitingInput extends Data.TaggedClass("PlanAwaitingInput")<Rec
  * @since 1.0.0
  * @category events
  */
+export class PlanTaskCreationStarted extends Data.TaggedClass("PlanTaskCreationStarted")<Record<string, never>> {}
+
+/**
+ * @since 1.0.0
+ * @category events
+ */
 export type PlanEvent =
   | PlanTextOutput
   | PlanQuestion
@@ -97,6 +103,7 @@ export type PlanEvent =
   | PlanSpecUpdated
   | PlanAnalysisReady
   | PlanAwaitingInput
+  | PlanTaskCreationStarted
 
 const StdinEOF: unique symbol = Symbol.for("StdinEOF")
 type StdinItem = Uint8Array | typeof StdinEOF
@@ -272,8 +279,6 @@ export const PlanSessionLive = Layer.scoped(
           Option.none()
         )
         const stage2Ref = yield* Ref.make(false)
-        const stage2BufferRef = yield* Ref.make<ReadonlyArray<string>>([])
-
         const flushPendingText = Effect.gen(function*() {
           const pending = yield* Ref.get(pendingTextRef)
           if (Option.isSome(pending)) {
@@ -282,14 +287,6 @@ export const PlanSessionLive = Layer.scoped(
             )
             yield* Queue.offer(eventQueue, new PlanTextOutput({ text: pending.value.text }))
             yield* Ref.set(pendingTextRef, Option.none())
-          }
-        })
-
-        const flushStage2Buffer = Effect.gen(function*() {
-          const buf = yield* Ref.get(stage2BufferRef)
-          if (buf.length > 0) {
-            yield* Queue.offer(eventQueue, new PlanTextOutput({ text: buf.join("\n") }))
-            yield* Ref.set(stage2BufferRef, [])
           }
         })
 
@@ -437,16 +434,13 @@ export const PlanSessionLive = Layer.scoped(
               if (Option.isSome(parsed)) {
                 yield* routeMessage(parsed.value)
               } else if (isStage2) {
-                yield* Ref.update(stage2BufferRef, (buf) => [...buf, line])
-                const buf = yield* Ref.get(stage2BufferRef)
-                if (line.includes("\u2713") || line.includes("\u2717") || buf.length >= 20) {
-                  yield* flushStage2Buffer
+                if (line.includes("[Session started]")) {
+                  yield* Queue.offer(eventQueue, new PlanTaskCreationStarted({}))
                 }
               }
             })
           ),
           Stream.runDrain,
-          Effect.tap(() => flushStage2Buffer),
           Effect.tap(() => flushPendingText),
           Effect.tap(() => Effect.log("stdout stream completed")),
           Effect.tapError((err) =>

@@ -156,6 +156,7 @@ export const runEventLoop = Effect.gen(function*() {
   const timer = yield* CommentTimer
   const taskTracker = yield* TaskTracker
   const branchParser = yield* BranchParser
+  const lalphConfig = yield* LalphConfig
   const planSession = yield* PlanSession
 
   // Boot the chat state machine
@@ -266,6 +267,10 @@ export const runEventLoop = Effect.gen(function*() {
         Match.tag("PlanSpecUpdated", () => actor.send(new PlanSpecUpdatedReq())),
         Match.tag("PlanAnalysisReady", () => actor.send(new PlanAnalysisReadyReq())),
         Match.tag("PlanAwaitingInput", () => actor.send(new PlanAwaitingInputReq())),
+        Match.tag("PlanTaskCreationStarted", () => {
+          const source = lalphConfig.issueSource === "linear" ? "Linear" : "GitHub"
+          return actor.send(new PlanTextOutput({ text: `Task creation in ${source} started.` }))
+        }),
         Match.tag("PlanCompleted", () => actor.send(new PlanCompletedReq())),
         Match.tag("PlanFailed", (e) => actor.send(new PlanFailedReq({ message: e.message }))),
         Match.exhaustive

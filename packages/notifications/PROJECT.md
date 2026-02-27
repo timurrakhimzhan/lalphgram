@@ -356,6 +356,7 @@ Manages interactive Claude plan sessions via subprocess.
 - `PlanSpecUpdated` — Existing spec file re-written
 - `PlanAnalysisReady` — `.specs/analysis.md` written
 - `PlanAwaitingInput` — Claude finished its turn (result message received), awaiting user input
+- `PlanTaskCreationStarted` — `[Session started]` detected in stage 2 (after approve)
 - `PlanCompleted` — Process exited successfully
 - `PlanFailed` — Process failed or stream error
 
