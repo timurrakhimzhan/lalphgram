@@ -1470,6 +1470,102 @@ describe("my own answer flow", () => {
       expect(answerFn).toHaveBeenCalledTimes(1)
       expect(answerFn).toHaveBeenCalledWith("Postgres\nFastify")
     }))
+
+  it.effect("Custom answer works after PlanAwaitingInputReq arrives", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ answerFn, events: Stream.fromQueue(planEventQueue) })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act — setup, emit question, then PlanAwaitingInput (which currently wipes question state)
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
+      yield* flush
+      yield* Queue.offer(planEventQueue, new PlanAwaitingInput({}))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "my custom text", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert — "Type your answer:" prompt shown, and custom text forwarded as answer
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith({
+        text: "Type your answer:",
+        options: [{ label: "Back" }]
+      })
+      expect(answerFn).toHaveBeenCalledWith("my custom text")
+    }))
+
+  it.effect("Custom answer works after PlanSpecCreated arrives", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ answerFn, events: Stream.fromQueue(planEventQueue) })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act — setup, emit question, then PlanSpecCreated
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
+      yield* flush
+      yield* Queue.offer(planEventQueue, new PlanSpecCreated({ filePath: ".specs/feature.md" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "my spec text", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert — question state preserved, custom answer forwarded
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith({
+        text: "Type your answer:",
+        options: [{ label: "Back" }]
+      })
+      expect(answerFn).toHaveBeenCalledWith("my spec text")
+    }))
+
+  it.effect("Custom answer works after PlanAnalysisReady arrives", () =>
+    Effect.gen(function*() {
+      // Arrange
+      const answerFn = vi.fn(() => Effect.succeed(undefined))
+      const planEventQueue = yield* Queue.unbounded<PlanEvent>()
+      const planSessionMock = makeQuestionPlanSession({ answerFn, events: Stream.fromQueue(planEventQueue) })
+      const queue = yield* Queue.unbounded<IncomingMessage>()
+      yield* Effect.forEach(planSetupMessages, (msg) => Queue.offer(queue, msg))
+      const messengerMock = makeMessengerMock(Stream.fromQueue(queue))
+      const { layer } = makeTestLayer([], { messengerMock, planSessionMock })
+
+      // Act — setup, emit question, then PlanAnalysisReady
+      yield* runEventLoop.pipe(Effect.provide(layer), Effect.fork)
+      yield* flush
+      yield* Queue.offer(planEventQueue, questionEvent)
+      yield* flush
+      yield* Queue.offer(planEventQueue, new PlanAnalysisReady({ filePath: ".specs/analysis.md" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "Custom answer", from: "user" }))
+      yield* flush
+      yield* Queue.offer(queue, new IncomingMessage({ chatId: "1", text: "my analysis text", from: "user" }))
+      yield* Queue.shutdown(queue)
+      yield* flush
+
+      // Assert — question state preserved, custom answer forwarded
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith({
+        text: "Type your answer:",
+        options: [{ label: "Back" }]
+      })
+      expect(answerFn).toHaveBeenCalledWith("my analysis text")
+    }))
 })
 
 describe("project selection", () => {

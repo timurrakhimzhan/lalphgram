@@ -295,45 +295,6 @@ export const chatMachine = Machine.make(
         })
       })
 
-    const checkAllReady = (
-      projectId: string,
-      planType: string,
-      flags: ReadyFlags,
-      analysisFollowUpSent: boolean
-    ): Effect.Effect<ChatState, never, never> =>
-      Effect.gen(function*() {
-        yield* Effect.log("checkAllReady").pipe(
-          Effect.annotateLogs({
-            spec: String(flags.spec),
-            analysis: String(flags.analysis),
-            idle: String(flags.idle),
-            planType,
-            analysisFollowUpSent: String(analysisFollowUpSent)
-          })
-        )
-        if (!flags.spec || !flags.analysis || !flags.idle) {
-          return ChatState.SessionRunning({
-            projectId,
-            planType,
-            pendingAnswerCount: 0,
-            pendingOptionLabels: new Set(),
-            answersBuffer: [],
-            awaitingFreeTextAnswer: false,
-            lastQuestionMessage: Option.none(),
-            readyFlags: flags,
-            analysisFollowUpSent
-          })
-        }
-        yield* sendSpecFiles(planType).pipe(
-          Effect.catchAll((err) => Effect.logError(`Failed to send spec files: ${String(err)}`))
-        )
-        yield* notifier.sendMessage({
-          text: "Spec ready. Reply with questions or approve to proceed.",
-          replyKeyboard: SPEC_READY_KEYBOARD
-        }).pipe(Effect.orElseSucceed(() => undefined))
-        return ChatState.SpecReady({ projectId, planType, readyFlags: flags, analysisFollowUpSent })
-      })
-
     const maybeAnalysisFollowUp = (
       planType: string,
       alreadySent: boolean
@@ -345,38 +306,6 @@ export const chatMachine = Machine.make(
           Effect.orElseSucceed(() => undefined),
           Effect.as(true)
         )
-
-    /**
-     * Extract projectId, planType, readyFlags, and analysisFollowUpSent from any
-     * "active session" state (SessionRunning, AwaitingFollowUpDecision, SpecReady).
-     */
-    const extractActiveState = (state: ChatState) => {
-      switch (state._tag) {
-        case "SessionRunning":
-          return Option.some({
-            projectId: state.projectId,
-            planType: state.planType,
-            readyFlags: state.readyFlags,
-            analysisFollowUpSent: state.analysisFollowUpSent
-          })
-        case "AwaitingFollowUpDecision":
-          return Option.some({
-            projectId: state.projectId,
-            planType: state.planType,
-            readyFlags: state.readyFlags,
-            analysisFollowUpSent: state.analysisFollowUpSent
-          })
-        case "SpecReady":
-          return Option.some({
-            projectId: state.projectId,
-            planType: state.planType,
-            readyFlags: state.readyFlags,
-            analysisFollowUpSent: state.analysisFollowUpSent
-          })
-        default:
-          return Option.none()
-      }
-    }
 
     // ── Procedure handlers ─────────────────────────────────────
 
@@ -894,13 +823,15 @@ export const chatMachine = Machine.make(
       // ── PlanSpecCreatedReq ─────────────────────────────────
       Machine.procedures.add<PlanSpecCreatedReq>()("PlanSpecCreatedReq", (ctx) =>
         Effect.gen(function*() {
-          const active = extractActiveState(ctx.state)
-          if (Option.isNone(active)) return reply(ctx.state)
-          const { analysisFollowUpSent, planType, projectId, readyFlags } = active.value
-          const sent = yield* maybeAnalysisFollowUp(planType, analysisFollowUpSent)
-          const newFlags = new ReadyFlags({ ...readyFlags, spec: true })
-          const newState = yield* checkAllReady(projectId, planType, newFlags, sent)
-          return reply(newState)
+          const { state } = ctx
+          if (
+            state._tag !== "SessionRunning" && state._tag !== "AwaitingFollowUpDecision" && state._tag !== "SpecReady"
+          ) {
+            return reply(state)
+          }
+          const sent = yield* maybeAnalysisFollowUp(state.planType, state.analysisFollowUpSent)
+          const newFlags = new ReadyFlags({ ...state.readyFlags, spec: true })
+          return reply({ ...state, readyFlags: newFlags, analysisFollowUpSent: sent })
         }).pipe(
           Effect.tapError((err) => Effect.logError(`Plan event relay error: ${String(err)}`)),
           Effect.orElseSucceed(() => reply(ctx.state))
@@ -908,39 +839,56 @@ export const chatMachine = Machine.make(
       // ── PlanSpecUpdatedReq ─────────────────────────────────
       Machine.procedures.add<PlanSpecUpdatedReq>()("PlanSpecUpdatedReq", (ctx) =>
         Effect.gen(function*() {
-          const active = extractActiveState(ctx.state)
-          if (Option.isNone(active)) return reply(ctx.state)
-          const { analysisFollowUpSent, planType, projectId, readyFlags } = active.value
-          const sent = yield* maybeAnalysisFollowUp(planType, analysisFollowUpSent)
-          const newFlags = new ReadyFlags({ ...readyFlags, spec: true })
-          const newState = yield* checkAllReady(projectId, planType, newFlags, sent)
-          return reply(newState)
+          const { state } = ctx
+          if (
+            state._tag !== "SessionRunning" && state._tag !== "AwaitingFollowUpDecision" && state._tag !== "SpecReady"
+          ) {
+            return reply(state)
+          }
+          const sent = yield* maybeAnalysisFollowUp(state.planType, state.analysisFollowUpSent)
+          const newFlags = new ReadyFlags({ ...state.readyFlags, spec: true })
+          return reply({ ...state, readyFlags: newFlags, analysisFollowUpSent: sent })
         }).pipe(
           Effect.tapError((err) => Effect.logError(`Plan event relay error: ${String(err)}`)),
           Effect.orElseSucceed(() => reply(ctx.state))
         )),
       // ── PlanAnalysisReadyReq ───────────────────────────────
-      Machine.procedures.add<PlanAnalysisReadyReq>()("PlanAnalysisReadyReq", (ctx) =>
-        Effect.gen(function*() {
-          const active = extractActiveState(ctx.state)
-          if (Option.isNone(active)) return reply(ctx.state)
-          const { analysisFollowUpSent, planType, projectId, readyFlags } = active.value
-          const newFlags = new ReadyFlags({ ...readyFlags, analysis: true })
-          const newState = yield* checkAllReady(projectId, planType, newFlags, analysisFollowUpSent)
-          return reply(newState)
-        }).pipe(
-          Effect.tapError((err) => Effect.logError(`Plan event relay error: ${String(err)}`)),
-          Effect.orElseSucceed(() => reply(ctx.state))
-        )),
+      Machine.procedures.add<PlanAnalysisReadyReq>()("PlanAnalysisReadyReq", (ctx) => {
+        const { state } = ctx
+        if (
+          state._tag !== "SessionRunning" && state._tag !== "AwaitingFollowUpDecision" && state._tag !== "SpecReady"
+        ) {
+          return Effect.succeed(reply(state))
+        }
+        const newFlags = new ReadyFlags({ ...state.readyFlags, analysis: true })
+        return Effect.succeed(reply({ ...state, readyFlags: newFlags }))
+      }),
       // ── PlanAwaitingInputReq ───────────────────────────────
       Machine.procedures.add<PlanAwaitingInputReq>()("PlanAwaitingInputReq", (ctx) =>
         Effect.gen(function*() {
-          const active = extractActiveState(ctx.state)
-          if (Option.isNone(active)) return reply(ctx.state)
-          const { analysisFollowUpSent, planType, projectId, readyFlags } = active.value
-          const newFlags = new ReadyFlags({ ...readyFlags, idle: true })
-          const newState = yield* checkAllReady(projectId, planType, newFlags, analysisFollowUpSent)
-          return reply(newState)
+          const { state } = ctx
+          if (
+            state._tag !== "SessionRunning" && state._tag !== "AwaitingFollowUpDecision" && state._tag !== "SpecReady"
+          ) {
+            return reply(state)
+          }
+          const newFlags = new ReadyFlags({ ...state.readyFlags, idle: true })
+          if (newFlags.spec && newFlags.analysis && newFlags.idle) {
+            yield* sendSpecFiles(state.planType).pipe(
+              Effect.catchAll((err) => Effect.logError(`Failed to send spec files: ${String(err)}`))
+            )
+            yield* notifier.sendMessage({
+              text: "Spec ready. Reply with questions or approve to proceed.",
+              replyKeyboard: SPEC_READY_KEYBOARD
+            }).pipe(Effect.orElseSucceed(() => undefined))
+            return reply(ChatState.SpecReady({
+              projectId: state.projectId,
+              planType: state.planType,
+              readyFlags: newFlags,
+              analysisFollowUpSent: state.analysisFollowUpSent
+            }))
+          }
+          return reply({ ...state, readyFlags: newFlags })
         }).pipe(
           Effect.tapError((err) => Effect.logError(`Plan event relay error: ${String(err)}`)),
           Effect.orElseSucceed(() => reply(ctx.state))
