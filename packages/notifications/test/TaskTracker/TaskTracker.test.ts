@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { AppRuntimeConfig, RuntimeConfig } from "../../src/services/AppRuntimeConfig.js"
+import { LalphConfig } from "../../src/services/LalphConfig.js"
 import type { LinearSdkClientService } from "../../src/services/LinearSdkClient.js"
 import { LinearSdkClient, LinearSdkClientError } from "../../src/services/LinearSdkClient.js"
 import type { OctokitClientService } from "../../src/services/OctokitClient.js"
@@ -37,10 +38,20 @@ const makeLinearSdkMock = (overrides: Partial<LinearSdkClientService> = {}): Lin
     ...overrides
   })
 
+const linearLalphConfigMock = LalphConfig.of({
+  githubToken: Effect.succeed(""),
+  linearToken: Effect.succeed(""),
+  issueSource: "linear",
+  specUploader: "telegraph",
+  repoFullName: "owner/my-repo",
+  linearProjectIds: ["proj-id-1"]
+})
+
 const makeLinearTrackerTestLayer = (mock: LinearSdkClientService) =>
   LinearTrackerLive.pipe(
     Layer.provide(Layer.succeed(LinearSdkClient, mock)),
-    Layer.provide(runtimeConfigLayer)
+    Layer.provide(runtimeConfigLayer),
+    Layer.provide(Layer.succeed(LalphConfig, linearLalphConfigMock))
   )
 
 describe("LinearTracker", () => {
@@ -134,6 +145,36 @@ describe("LinearTracker", () => {
       expect(result.message).toContain("Failed to get issue")
     }).pipe(Effect.provide(makeLinearTrackerTestLayer(mock)))
   })
+
+  it.effect("passes project IDs to listIssues", () => {
+    // Arrange
+    const now = "2024-01-01T00:00:00.000Z"
+    const mock = makeLinearSdkMock({
+      listIssues: vi.fn(() =>
+        Effect.succeed([{
+          id: "id-1",
+          identifier: "RAK-1",
+          title: "Test issue",
+          url: "https://linear.app/RAK-1",
+          createdAt: now,
+          updatedAt: now,
+          stateName: "Todo"
+        }])
+      )
+    })
+
+    return Effect.gen(function*() {
+      const tracker = yield* TaskTracker
+
+      // Act
+      yield* tracker.eventStream.pipe(Stream.take(1), Stream.runCollect)
+
+      // Assert
+      expect(mock.listIssues).toHaveBeenCalledWith(
+        expect.objectContaining({ projectIds: ["proj-id-1"] })
+      )
+    }).pipe(Effect.provide(makeLinearTrackerTestLayer(mock)))
+  })
 })
 
 const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): OctokitClientService =>
@@ -176,10 +217,20 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
     ...overrides
   })
 
+const githubLalphConfigMock = LalphConfig.of({
+  githubToken: Effect.succeed(""),
+  linearToken: Effect.succeed(""),
+  issueSource: "github",
+  specUploader: "telegraph",
+  repoFullName: "owner/my-repo",
+  linearProjectIds: []
+})
+
 const makeGitHubIssueTrackerTestLayer = (mock: OctokitClientService) =>
   GitHubIssueTrackerLive.pipe(
     Layer.provide(Layer.succeed(OctokitClient, mock)),
-    Layer.provide(runtimeConfigLayer)
+    Layer.provide(runtimeConfigLayer),
+    Layer.provide(Layer.succeed(LalphConfig, githubLalphConfigMock))
   )
 
 describe("GitHubIssueTracker", () => {
@@ -274,6 +325,48 @@ describe("GitHubIssueTracker", () => {
       // Assert
       expect(result).toBeInstanceOf(TaskTrackerError)
       expect(result.message).toContain("GitHub API request failed")
+    }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
+  })
+
+  it.effect("filters out issues from other repos", () => {
+    // Arrange
+    const now = "2024-01-01T00:00:00.000Z"
+    const mock = makeGitHubOctokitMock({
+      listUserIssues: vi.fn(() =>
+        Effect.succeed([
+          {
+            number: 1,
+            title: "My repo issue",
+            state: "open",
+            htmlUrl: "https://github.com/owner/my-repo/issues/1",
+            createdAt: now,
+            updatedAt: now,
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo"
+          },
+          {
+            number: 2,
+            title: "Other repo issue",
+            state: "open",
+            htmlUrl: "https://github.com/owner/other-repo/issues/2",
+            createdAt: now,
+            updatedAt: now,
+            repositoryUrl: "https://api.github.com/repos/owner/other-repo"
+          }
+        ])
+      )
+    })
+
+    return Effect.gen(function*() {
+      const tracker = yield* TaskTracker
+
+      // Act
+      const chunk = yield* tracker.eventStream.pipe(Stream.take(1), Stream.runCollect)
+      const events = Array.from(chunk)
+
+      // Assert
+      expect(events).toHaveLength(1)
+      expect(events[0]!._tag).toBe("TaskCreated")
+      expect(events[0]!.issue.id).toBe("owner/my-repo#1")
     }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
   })
 })

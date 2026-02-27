@@ -84,6 +84,7 @@ Reads credentials from `~/.lalph/config/` files. Watches file system for token c
 | `issueSource` | `"linear" \| "github"` | Static — from `settings.issueSource` file |
 | `specUploader` | `"gist" \| "telegraph"` | Static — from `settings.specUploader` (default `"telegraph"`) |
 | `repoFullName` | `string` | Parsed from `git remote get-url origin` |
+| `linearProjectIds` | `ReadonlyArray<string>` | Linear project IDs from enabled lalph projects (empty if `issueSource !== "linear"` or none found) |
 
 **Error**: `LalphConfigError`
 **Layer**: `LalphConfigLive` (scoped) — requires `AppContext`, `FileSystem`, `CommandExecutor`
@@ -228,19 +229,19 @@ Abstract interface for issue tracking. Two implementations selected at runtime v
 
 ### LinearTracker (TaskTracker impl)
 **File**: `services/TaskTracker/LinearTracker.ts`
-- Polls Linear for issues updated since last poll
+- Polls Linear for issues updated since last poll, scoped to configured Linear project IDs
 - Tracks state in `HashMap<issueId, stateName>`
 - `moveToTodo` resolves "Todo" workflow state ID, updates issue
 - `setPriorityUrgent` sets priority to 1
-- **Layer**: `LinearTrackerLive` — requires `LinearSdkClient`, `AppRuntimeConfig`
+- **Layer**: `LinearTrackerLive` — requires `LinearSdkClient`, `AppRuntimeConfig`, `LalphConfig`
 
 ### GitHubIssueTracker (TaskTracker impl)
 **File**: `services/TaskTracker/GitHubIssueTracker.ts`
-- Polls GitHub issues updated since last poll
+- Polls GitHub issues updated since last poll, filtered to current repo via `LalphConfig.repoFullName`
 - Issue ID format: `owner/repo#number`
 - `moveToTodo` adds "todo" label
 - `setPriorityUrgent` adds "urgent" label
-- **Layer**: `GitHubIssueTrackerLive` — requires `GitHubClient`, `OctokitClient`, `AppRuntimeConfig`, `LalphConfig`
+- **Layer**: `GitHubIssueTrackerLive` — requires `OctokitClient`, `AppRuntimeConfig`, `LalphConfig`
 
 ---
 
@@ -300,7 +301,7 @@ Wraps `@linear/sdk` LinearClient. Refreshes if token changes.
 
 | Method | Description |
 |---|---|
-| `listIssues({ since })` | Issues updated since timestamp |
+| `listIssues({ since, projectIds? })` | Issues updated since timestamp, optionally filtered by Linear project IDs |
 | `getIssue({ id })` | Single issue |
 | `listWorkflowStates()` | All workflow states |
 | `updateIssue({ id, stateId })` | Change issue state |
@@ -338,7 +339,7 @@ Manages interactive Claude plan sessions via subprocess.
 | `answer(text)` | `Effect<void>` | Send plain text answer to stdin (for ask_user responses) |
 | `sendFollowUp(text)` | `Effect<void>` | Send `{ type: "follow_up", text }` to stdin |
 | `interrupt(text)` | `Effect<void>` | Send `{ type: "shim_interrupt", text }` to stdin |
-| `approve` | `Effect<void>` | Send `{ type: "shim_approve" }` to stdin |
+| `approve` | `Effect<void>` | Send `{ type: "shim_approve" }` to stdin and close stdin pipe (StdinEOF) so stage 2 Claude gets EOF |
 | `reject` | `Effect<void>` | Send `{ type: "shim_abort" }` and close session |
 | `isActive` | `Effect<boolean>` | Check if session is running |
 | `isIdle` | `Effect<boolean>` | True after `result` message, false when Claude is working |
@@ -435,7 +436,8 @@ All events are `Data.TaggedEnum` (tagged unions with `_tag` discriminator).
 ### StreamJsonParser (`lib/StreamJsonParser.ts`)
 - Decodes NDJSON from Claude's `--output-format stream-json`
 - Types: `StreamJsonMessage`, `ContentBlock`, `Question`, `AskUserQuestionInput`
-- `parseNdjsonMessages` for stream processing
+- `decodeJsonMessage` — decode a single JSON line into `StreamJsonMessage` (used by PlanSession inline)
+- `parseNdjsonMessages` — stream combinator: splitLines → decode → filter (used for simple NDJSON streams)
 
 ---
 

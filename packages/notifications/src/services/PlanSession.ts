@@ -5,7 +5,7 @@
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
 import { Context, Data, Effect, Exit, Layer, Option, Queue, Ref, Schema, Scope, Stream } from "effect"
 import type { ContentBlock, StreamJsonMessage } from "../lib/StreamJsonParser.js"
-import { AskUserQuestionInput, parseNdjsonMessages } from "../lib/StreamJsonParser.js"
+import { AskUserQuestionInput, decodeJsonMessage } from "../lib/StreamJsonParser.js"
 import { AppContext } from "./AppContext.js"
 
 /**
@@ -98,10 +98,13 @@ export type PlanEvent =
   | PlanAnalysisReady
   | PlanAwaitingInput
 
+const StdinEOF: unique symbol = Symbol.for("StdinEOF")
+type StdinItem = Uint8Array | typeof StdinEOF
+
 interface ActiveSession {
   readonly process: CommandExecutor.Process
   readonly scope: Scope.CloseableScope
-  readonly stdinQueue: Queue.Queue<Uint8Array>
+  readonly stdinQueue: Queue.Queue<StdinItem>
 }
 
 /**
@@ -242,13 +245,14 @@ export const PlanSessionLive = Layer.scoped(
           )
         )
 
-        const stdinQueue = yield* Queue.unbounded<Uint8Array>()
+        const stdinQueue = yield* Queue.unbounded<StdinItem>()
         yield* Ref.set(sessionRef, Option.some({ process, scope: processScope, stdinQueue }))
         yield* Effect.log("Plan session process spawned").pipe(
           Effect.annotateLogs({ tempFile })
         )
 
         yield* Stream.fromQueue(stdinQueue).pipe(
+          Stream.takeWhile((item): item is Uint8Array => item !== StdinEOF),
           Stream.run(process.stdin),
           Effect.tap(() => Effect.log("stdin stream closed")),
           Effect.catchAll((err) => Effect.logError(`stdin write error: ${String(err)}`)),
@@ -267,6 +271,8 @@ export const PlanSessionLive = Layer.scoped(
         const pendingTextRef = yield* Ref.make<Option.Option<{ messageId: string; text: string }>>(
           Option.none()
         )
+        const stage2Ref = yield* Ref.make(false)
+        const stage2BufferRef = yield* Ref.make<ReadonlyArray<string>>([])
 
         const flushPendingText = Effect.gen(function*() {
           const pending = yield* Ref.get(pendingTextRef)
@@ -276,6 +282,14 @@ export const PlanSessionLive = Layer.scoped(
             )
             yield* Queue.offer(eventQueue, new PlanTextOutput({ text: pending.value.text }))
             yield* Ref.set(pendingTextRef, Option.none())
+          }
+        })
+
+        const flushStage2Buffer = Effect.gen(function*() {
+          const buf = yield* Ref.get(stage2BufferRef)
+          if (buf.length > 0) {
+            yield* Queue.offer(eventQueue, new PlanTextOutput({ text: buf.join("\n") }))
+            yield* Ref.set(stage2BufferRef, [])
           }
         })
 
@@ -381,6 +395,7 @@ export const PlanSessionLive = Layer.scoped(
             if (msg.type === "result") {
               yield* flushPendingText
               yield* Ref.set(idleRef, true)
+              yield* Ref.set(stage2Ref, true)
               yield* Queue.offer(eventQueue, new PlanAwaitingInput({}))
               yield* Effect.log("Planner result received")
               return
@@ -401,9 +416,37 @@ export const PlanSessionLive = Layer.scoped(
           ),
           Stream.map(stripAnsi),
           Stream.map((text) => text.replace(/\r/g, "\n")),
-          parseNdjsonMessages,
-          Stream.mapEffect(routeMessage),
+          Stream.splitLines,
+          Stream.filter((line) => line.trim().length > 0),
+          Stream.mapEffect((line) =>
+            Effect.gen(function*() {
+              const isStage2 = yield* Ref.get(stage2Ref)
+              const parsed = yield* decodeJsonMessage(line).pipe(
+                Effect.tapError((err) => {
+                  if (isStage2) return Effect.void
+                  return Effect.logDebug("Non-JSON stdout line, skipping").pipe(
+                    Effect.annotateLogs({
+                      line: line.slice(0, 300),
+                      lineBytes: Array.from(line.slice(0, 100), (c) => c.charCodeAt(0).toString(16)).join(" "),
+                      error: err.message
+                    })
+                  )
+                }),
+                Effect.option
+              )
+              if (Option.isSome(parsed)) {
+                yield* routeMessage(parsed.value)
+              } else if (isStage2) {
+                yield* Ref.update(stage2BufferRef, (buf) => [...buf, line])
+                const buf = yield* Ref.get(stage2BufferRef)
+                if (line.includes("\u2713") || line.includes("\u2717") || buf.length >= 20) {
+                  yield* flushStage2Buffer
+                }
+              }
+            })
+          ),
           Stream.runDrain,
+          Effect.tap(() => flushStage2Buffer),
           Effect.tap(() => flushPendingText),
           Effect.tap(() => Effect.log("stdout stream completed")),
           Effect.tapError((err) =>
@@ -526,7 +569,8 @@ export const PlanSessionLive = Layer.scoped(
         Effect.annotateLogs({ payload: payload.trim() })
       )
       yield* Queue.offer(current.value.stdinQueue, encoder.encode(payload))
-      yield* Effect.log("shim_approve queued to stdin")
+      yield* Queue.offer(current.value.stdinQueue, StdinEOF)
+      yield* Effect.log("shim_approve + StdinEOF queued to stdin")
     })
 
     const reject = Effect.gen(function*() {

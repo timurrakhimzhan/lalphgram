@@ -7,6 +7,7 @@ import {
   PlanAnalysisReady,
   PlanCommandBuilder,
   PlanCompleted,
+  type PlanEvent,
   PlanFailed,
   PlanQuestion,
   PlanSession,
@@ -65,6 +66,17 @@ const failCommandLayer = Layer.succeed(
       Command.stdin("pipe")
     )
 )
+
+const shellCommandLayer = (script: string) =>
+  Layer.succeed(
+    PlanCommandBuilder,
+    (_tempFile: string) =>
+      Command.make("sh", "-c", script).pipe(
+        Command.stdout("pipe"),
+        Command.stderr("pipe"),
+        Command.stdin("pipe")
+      )
+  )
 
 const makeTestLayer = (commandLayer: Layer.Layer<PlanCommandBuilder>) =>
   PlanSessionLive.pipe(
@@ -638,4 +650,51 @@ describe("PlanSession", () => {
         expect(idle).toBe(false)
       }).pipe(Effect.provide(testLayer))
     }))
+
+  it.live("forwards non-JSON stage 2 text as PlanTextOutput after approve", () =>
+    Effect.gen(function*() {
+      // Arrange — shell script simulates full shim flow:
+      // shim_ready → read shim_start → assistant + result → read shim_approve → non-JSON text → exit
+      const shimReady = JSON.stringify({ type: "shim_ready" })
+      const assistantMsg = textMessage("spec output")
+      const resultMsg = JSON.stringify({ type: "result", subtype: "success" })
+      const script = [
+        `echo '${shimReady}'`,
+        "read line",
+        `echo '${assistantMsg}'`,
+        `echo '${resultMsg}'`,
+        "read line",
+        "echo '[Session started]'",
+        "echo 'Running: Bash ls'",
+        "echo '\u2713 Done'"
+      ].join("\n")
+      const testLayer = makeTestLayer(shellCommandLayer(script))
+
+      yield* Effect.gen(function*() {
+        const session = yield* PlanSession
+
+        // Act — start session and wait for PlanAwaitingInput (result received)
+        yield* session.start("test plan")
+        yield* session.events.pipe(
+          Stream.filter((e): e is PlanEvent => e._tag === "PlanAwaitingInput"),
+          Stream.take(1),
+          Stream.runDrain
+        )
+        yield* session.approve
+
+        // Assert — collect remaining events until PlanCompleted
+        const events = yield* session.events.pipe(
+          Stream.takeUntil((e) => e._tag === "PlanCompleted" || e._tag === "PlanFailed"),
+          Stream.runCollect
+        )
+        const arr = [...events]
+        const textEvents = arr.filter((e): e is PlanTextOutput => e._tag === "PlanTextOutput")
+        expect(textEvents.length).toBeGreaterThan(0)
+        const allText = textEvents.map((e) => e.text).join("\n")
+        expect(allText).toContain("[Session started]")
+        expect(allText).toContain("Done")
+        const completed = arr.find((e) => e._tag === "PlanCompleted")
+        expect(completed).toBeDefined()
+      }).pipe(Effect.provide(testLayer))
+    }), { timeout: 10_000 })
 })

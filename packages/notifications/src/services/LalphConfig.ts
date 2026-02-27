@@ -3,7 +3,7 @@
  * @since 1.0.0
  */
 import { Command, FileSystem, Path } from "@effect/platform"
-import { Context, Data, Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Array as Arr, Context, Data, Effect, Layer, Ref, Schema, Stream } from "effect"
 import { LalphGithubToken, LalphLinearToken } from "../schemas/CredentialSchemas.js"
 import { AppContext } from "./AppContext.js"
 
@@ -43,6 +43,7 @@ export interface LalphConfigService {
   readonly issueSource: "linear" | "github"
   readonly specUploader: "gist" | "telegraph"
   readonly repoFullName: string
+  readonly linearProjectIds: ReadonlyArray<string>
 }
 
 /**
@@ -160,6 +161,39 @@ export const LalphConfigLive = Layer.scoped(
       return parseRepoFullName(output.trim())
     })
 
+    const ProjectEntry = Schema.Struct({ id: Schema.String, enabled: Schema.Boolean })
+
+    const linearProjectIds: ReadonlyArray<string> = issueSource === "linear"
+      ? yield* Effect.gen(function*() {
+        const projectsJson = yield* readStringFile("settings.projects").pipe(
+          Effect.map((raw) => JSON.parse(raw)),
+          Effect.flatMap(Schema.decodeUnknown(Schema.Array(ProjectEntry))),
+          Effect.orElseSucceed((): ReadonlyArray<Schema.Schema.Type<typeof ProjectEntry>> => [])
+        )
+        const enabledIds = Arr.filter(projectsJson, (p) => p.enabled).map((p) => p.id)
+        const projectIds = yield* Effect.forEach(enabledIds, (id) => {
+          const filePath = pathService.join(
+            appContext.projectRoot,
+            ".lalph",
+            "projects",
+            encodeURIComponent(id),
+            "linear.selectedProjectId"
+          )
+          return fs.readFileString(filePath).pipe(
+            Effect.flatMap((content) =>
+              Effect.try({
+                try: () => JSON.parse(content),
+                catch: (err) => err
+              })
+            ),
+            Effect.flatMap(Schema.decodeUnknown(Schema.String)),
+            Effect.option
+          )
+        })
+        return Arr.filterMap(projectIds, (opt) => opt)
+      })
+      : []
+
     const githubTokenRef = yield* Ref.make(githubTokenData.token)
     const linearTokenRef = yield* Ref.make(linearAccessToken)
 
@@ -212,7 +246,8 @@ export const LalphConfigLive = Layer.scoped(
       ),
       issueSource,
       specUploader,
-      repoFullName
+      repoFullName,
+      linearProjectIds
     })
   })
 )

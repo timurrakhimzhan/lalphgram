@@ -7,6 +7,7 @@ import { TaskCreated, TaskUpdated } from "../../Events.js"
 import type { TaskTrackerEvent } from "../../Events.js"
 import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
 import { AppRuntimeConfig } from "../AppRuntimeConfig.js"
+import { LalphConfig } from "../LalphConfig.js"
 import { OctokitClient } from "../OctokitClient.js"
 import { TaskTracker, TaskTrackerError } from "./TaskTracker.js"
 
@@ -29,7 +30,9 @@ export const GitHubIssueTrackerLive = Layer.effect(
   Effect.gen(function*() {
     const octokit = yield* OctokitClient
     const config = yield* AppRuntimeConfig
+    const lalphConfig = yield* LalphConfig
     const interval = Duration.seconds(config.pollIntervalSeconds)
+    const repoFullName = lalphConfig.repoFullName
 
     const fetchRecentEvents = (since: string) =>
       Effect.gen(function*() {
@@ -42,10 +45,14 @@ export const GitHubIssueTrackerLive = Layer.effect(
             new TaskTrackerError({ message: `GitHub API request failed: ${String(err)}`, cause: err })
           )
         )
-        return Array.map(issues, (issue) => {
-          const repoFullName = extractRepoFullName(issue.repositoryUrl)
+        const filteredIssues = Array.filter(
+          issues,
+          (issue) => extractRepoFullName(issue.repositoryUrl) === repoFullName
+        )
+        return Array.map(filteredIssues, (issue) => {
+          const issueRepoFullName = extractRepoFullName(issue.repositoryUrl)
           const trackerIssue = new TrackerIssue({
-            id: `${repoFullName}#${issue.number}`,
+            id: `${issueRepoFullName}#${issue.number}`,
             title: issue.title,
             state: issue.state,
             url: issue.htmlUrl,

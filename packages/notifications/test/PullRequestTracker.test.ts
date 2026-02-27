@@ -74,7 +74,8 @@ const makeLalphConfigMock = (repoFullName: string) =>
     linearToken: Effect.succeed("test-linear-token"),
     issueSource: "github",
     specUploader: "telegraph",
-    repoFullName
+    repoFullName,
+    linearProjectIds: []
   })
 
 const makeGitHubClientMock = (overrides: Partial<{

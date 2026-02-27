@@ -7,6 +7,7 @@ import { TaskCreated, TaskUpdated } from "../../Events.js"
 import type { TaskTrackerEvent } from "../../Events.js"
 import { TrackerIssue, TrackerIssueEvent } from "../../schemas/TrackerSchemas.js"
 import { AppRuntimeConfig } from "../AppRuntimeConfig.js"
+import { LalphConfig } from "../LalphConfig.js"
 import { LinearSdkClient } from "../LinearSdkClient.js"
 import { TaskTracker, TaskTrackerError } from "./TaskTracker.js"
 
@@ -15,7 +16,9 @@ export const LinearTrackerLive = Layer.effect(
   Effect.gen(function*() {
     const linearClient = yield* LinearSdkClient
     const config = yield* AppRuntimeConfig
+    const lalphConfig = yield* LalphConfig
     const interval = Duration.seconds(config.pollIntervalSeconds)
+    const projectIds = lalphConfig.linearProjectIds
     const todoStateIdRef = yield* Ref.make<string | null>(null)
 
     const resolveTodoStateId = Effect.gen(function*() {
@@ -36,7 +39,7 @@ export const LinearTrackerLive = Layer.effect(
     })
 
     const fetchRecentEvents = (since: string) =>
-      linearClient.listIssues({ since }).pipe(
+      linearClient.listIssues({ since, projectIds }).pipe(
         Effect.map((issues) =>
           issues.map((node) => {
             const issue = new TrackerIssue({

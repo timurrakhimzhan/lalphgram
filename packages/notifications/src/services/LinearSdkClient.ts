@@ -46,6 +46,7 @@ export interface LinearSdkWorkflowState {
 export interface LinearSdkClientService {
   readonly listIssues: (params: {
     readonly since: string
+    readonly projectIds?: ReadonlyArray<string>
   }) => Effect.Effect<ReadonlyArray<LinearSdkIssue>, LinearSdkClientError>
   readonly getIssue: (params: {
     readonly id: string
@@ -99,7 +100,11 @@ export const LinearSdkClientLive = Layer.effect(
           const c = yield* getClient
           return yield* Effect.tryPromise({
             try: async () => {
-              const connection = await c.issues({ filter: { updatedAt: { gte: new Date(params.since) } } })
+              const filter: Record<string, unknown> = { updatedAt: { gte: new Date(params.since) } }
+              if (params.projectIds && params.projectIds.length > 0) {
+                filter.project = { id: { in: params.projectIds } }
+              }
+              const connection = await c.issues({ filter })
               const results: Array<LinearSdkIssue> = []
               for (const node of connection.nodes) {
                 const state = await node.state

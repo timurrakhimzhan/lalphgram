@@ -74,7 +74,7 @@ export class StreamJsonInput extends Schema.Class<StreamJsonInput>("StreamJsonIn
   parent_tool_use_id: Schema.NullOr(Schema.String)
 }) {}
 
-const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
+export const decodeJsonMessage = Schema.decodeUnknown(Schema.parseJson(StreamJsonMessage))
 
 /**
  * Splits a string stream into lines and parses each as a StreamJsonMessage,
