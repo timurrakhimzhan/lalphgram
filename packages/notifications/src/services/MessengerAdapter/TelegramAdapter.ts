@@ -73,9 +73,9 @@ export const TelegramAdapterLive = Layer.scoped(
     }).pipe(Effect.fork)
 
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
+      Effect.try(() => {
         bot.stop("shutdown")
-      })
+      }).pipe(Effect.ignore)
     )
 
     const sendMessage = (message: string | OutgoingMessage) =>

@@ -486,12 +486,9 @@ export const chatMachine = Machine.make(
                     { id: string; labelFilter: string; autoMergeLabel: string }
                   > => [])
                 )
-                const currentProject = projects.find((p) => p.id === state.projectId)
                 yield* planSession.start(
                   joinedText,
-                  projects.length > 1 ? state.projectId : undefined,
-                  projects.length > 1 ? currentProject?.labelFilter : undefined,
-                  projects.length > 1 ? currentProject?.autoMergeLabel : undefined
+                  projects.length > 1 ? state.projectId : undefined
                 ).pipe(
                   Effect.tapError((err) => notifier.sendMessage(`Plan error: ${err.message}`)),
                   Effect.orElseSucceed(() => undefined)

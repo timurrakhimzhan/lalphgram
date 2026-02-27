@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Logger, LogLevel, Stream } from "effect"
+import { Effect, Stream } from "effect"
 import { parseNdjsonMessages } from "../src/lib/StreamJsonParser.js"
 
 const parseMessages = (lines: ReadonlyArray<string>) =>
@@ -102,36 +102,20 @@ describe("StreamJsonParser", () => {
         expect(result[0]!.type).toBe("assistant")
       }))
 
-    it.effect("logs a warning for non-JSON lines", () =>
+    it.effect("silently filters non-JSON lines", () =>
       Effect.gen(function*() {
         // Arrange
         const ndjson = [
           "not valid json",
           JSON.stringify({ type: "system", subtype: "init" })
         ]
-        const warnings: Array<string> = []
 
         // Act
-        const result = yield* parseMessages(ndjson).pipe(
-          Effect.withLogSpan("test"),
-          Logger.withMinimumLogLevel(LogLevel.Warning),
-          Effect.provide(
-            Logger.replace(
-              Logger.defaultLogger,
-              Logger.make(({ logLevel, message }) => {
-                if (logLevel === LogLevel.Warning) {
-                  warnings.push(typeof message === "string" ? message : String(message))
-                }
-              })
-            )
-          )
-        )
+        const result = yield* parseMessages(ndjson)
 
         // Assert
         expect(result).toHaveLength(1)
         expect(result[0]!.type).toBe("system")
-        expect(warnings.length).toBeGreaterThanOrEqual(1)
-        expect(warnings.some((w) => w.includes("Non-JSON stdout line"))).toBe(true)
       }))
   })
 })

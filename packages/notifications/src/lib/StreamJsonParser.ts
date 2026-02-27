@@ -88,7 +88,7 @@ export const parseNdjsonMessages = flow(
   Stream.mapEffect((line: string) =>
     decodeJsonMessage(line).pipe(
       Effect.tapError((err) =>
-        Effect.logWarning("Non-JSON stdout line, skipping").pipe(
+        Effect.logDebug("Non-JSON stdout line, skipping").pipe(
           Effect.annotateLogs({ line: line.slice(0, 300), error: err.message.slice(0, 100) })
         )
       ),

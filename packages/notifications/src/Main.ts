@@ -163,7 +163,10 @@ const readVersion = Effect.gen(function*() {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
   const dir = pathService.dirname(fileURLToPath(import.meta.url))
-  const content = yield* fs.readFileString(pathService.join(dir, "..", "..", "package.json"))
+  const candidate1 = pathService.join(dir, "..", "..", "package.json")
+  const candidate2 = pathService.join(dir, "..", "package.json")
+  const pkgPath = (yield* fs.exists(candidate1)) ? candidate1 : candidate2
+  const content = yield* fs.readFileString(pkgPath)
   return Schema.decodeUnknownSync(PackageJsonVersion)(JSON.parse(content)).version
 })
 

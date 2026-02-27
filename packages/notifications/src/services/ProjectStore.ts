@@ -2,9 +2,9 @@
  * Project store — reads/writes lalph project configuration
  * @since 1.0.0
  */
-import { FileSystem, Path } from "@effect/platform"
+import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
 import type { Option } from "effect"
-import { Context, Data, Effect, Layer, Schema } from "effect"
+import { Context, Data, Duration, Effect, Layer, Schema, Stream } from "effect"
 import { LalphProject } from "../schemas/ProjectSchemas.js"
 import { AppContext } from "./AppContext.js"
 
@@ -46,6 +46,9 @@ export class ProjectStore extends Context.Tag("ProjectStore")<
 
 const ProjectsArray = Schema.Array(LalphProject)
 
+// Arrow down escape sequence for Prompt.select navigation
+const ARROW_DOWN = "\x1b[B"
+
 /**
  * @since 1.0.0
  * @category layers
@@ -56,6 +59,7 @@ export const ProjectStoreLive = Layer.effect(
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
     const appContext = yield* AppContext
+    const executor = yield* CommandExecutor.CommandExecutor
 
     const filePath = pathService.join(appContext.configDir, "settings.projects")
 
@@ -111,8 +115,77 @@ export const ProjectStoreLive = Layer.effect(
       readonly autoMergeLabel?: string
     }) =>
       Effect.gen(function*() {
-        const allProjects = yield* readProjects
-        const newProject = new LalphProject({
+        const encoder = new TextEncoder()
+        const stdinLines: Array<string> = [
+          data.id,
+          String(data.concurrency),
+          data.targetBranch._tag === "Some" ? data.targetBranch.value : "",
+          data.gitFlow === "commit" ? ARROW_DOWN : "",
+          data.reviewAgent ? "" : "0",
+          data.labelFilter ?? "",
+          data.autoMergeLabel ?? ""
+        ]
+        // Send each line with a delay so each Prompt has time to set up its keypress listener.
+        // Each Effect Prompt creates a new keypress listener — events arriving before
+        // the listener is ready are lost.
+        const stdinStream = Stream.fromIterable(stdinLines).pipe(
+          Stream.mapEffect((line) =>
+            Effect.gen(function*() {
+              yield* Effect.sleep(Duration.millis(500))
+              return encoder.encode(line + "\n")
+            })
+          )
+        )
+
+        const cmd = Command.make("lalph", "projects", "add").pipe(
+          Command.workingDirectory(appContext.projectRoot),
+          Command.stdout("pipe"),
+          Command.stderr("pipe"),
+          Command.stdin("pipe")
+        )
+
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            const process = yield* Command.start(cmd).pipe(
+              Effect.provideService(CommandExecutor.CommandExecutor, executor)
+            )
+
+            yield* stdinStream.pipe(
+              Stream.run(process.stdin),
+              Effect.forkDaemon
+            )
+
+            // Drain stdout so the process doesn't block when the pipe buffer fills
+            yield* process.stdout.pipe(Stream.runDrain, Effect.forkDaemon)
+
+            const exitCode = yield* process.exitCode
+            if (exitCode !== 0) {
+              const stderr = yield* process.stderr.pipe(
+                Stream.map((chunk) => new TextDecoder().decode(chunk)),
+                Stream.runCollect,
+                Effect.map((chunks) => [...chunks].join(""))
+              )
+              return yield* Effect.fail(
+                new ProjectStoreError({
+                  message: `lalph projects add failed (exit ${exitCode}): ${stderr}`,
+                  cause: null
+                })
+              )
+            }
+          })
+        ).pipe(
+          Effect.mapError((err) =>
+            err instanceof ProjectStoreError
+              ? err
+              : new ProjectStoreError({ message: `Failed to create project: ${String(err)}`, cause: err })
+          )
+        )
+
+        yield* Effect.log("Project created via lalph projects add").pipe(
+          Effect.annotateLogs({ projectId: data.id })
+        )
+
+        return new LalphProject({
           id: data.id,
           enabled: true,
           targetBranch: data.targetBranch,
@@ -122,23 +195,6 @@ export const ProjectStoreLive = Layer.effect(
           ...(data.labelFilter != null ? { labelFilter: data.labelFilter } : {}),
           ...(data.autoMergeLabel != null ? { autoMergeLabel: data.autoMergeLabel } : {})
         })
-        const updated = [...allProjects, newProject]
-        const encoded = yield* Schema.encode(ProjectsArray)(updated).pipe(
-          Effect.mapError((err) =>
-            new ProjectStoreError({ message: `Failed to encode projects: ${String(err)}`, cause: err })
-          )
-        )
-        yield* fs.makeDirectory(pathService.dirname(filePath), { recursive: true }).pipe(
-          Effect.mapError((err) =>
-            new ProjectStoreError({ message: `Failed to create config dir: ${String(err)}`, cause: err })
-          )
-        )
-        yield* fs.writeFileString(filePath, JSON.stringify(encoded, null, 2)).pipe(
-          Effect.mapError((err) =>
-            new ProjectStoreError({ message: `Failed to write projects file: ${String(err)}`, cause: err })
-          )
-        )
-        return newProject
       })
 
     return ProjectStore.of({ listProjects, getProject, createProject })

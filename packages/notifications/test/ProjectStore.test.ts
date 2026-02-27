@@ -1,7 +1,7 @@
-import { FileSystem } from "@effect/platform"
-import { NodeContext } from "@effect/platform-node"
+import { CommandExecutor, FileSystem, Path } from "@effect/platform"
+import { NodeContext, NodeFileSystem } from "@effect/platform-node"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, Option, Queue, Stream } from "effect"
 import { LalphProject } from "../src/schemas/ProjectSchemas.js"
 import { AppContext } from "../src/services/AppContext.js"
 import { ProjectStore, ProjectStoreLive } from "../src/services/ProjectStore.js"
@@ -12,11 +12,54 @@ const makeTestDir = () => {
   return `/tmp/.lalph-project-store-test-${testCounter}-${Date.now()}`
 }
 
+const makeFakeExecutor = (onStdin?: (data: string) => void): CommandExecutor.CommandExecutor => ({
+  [CommandExecutor.TypeId]: CommandExecutor.TypeId,
+  exitCode: () => Effect.succeed(CommandExecutor.ExitCode(0)),
+  start: () =>
+    Effect.gen(function*() {
+      const stdinQueue = yield* Queue.unbounded<Uint8Array>()
+      if (onStdin != null) {
+        yield* Stream.fromQueue(stdinQueue).pipe(
+          Stream.map((chunk) => new TextDecoder().decode(chunk)),
+          Stream.runForEach((text) => Effect.sync(() => onStdin(text))),
+          Effect.fork
+        )
+      }
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+      return {
+        [Symbol.for("@effect/platform/CommandExecutor/Process")]: Symbol.for(
+          "@effect/platform/CommandExecutor/Process"
+        ),
+        pid: { _tag: "Some", value: 1234 },
+        exitCode: Effect.succeed(CommandExecutor.ExitCode(0)),
+        stdout: Stream.empty,
+        stderr: Stream.empty,
+        stdin: { write: (chunk: Uint8Array) => Queue.offer(stdinQueue, chunk), end: () => Effect.void },
+        isRunning: Effect.succeed(false),
+        kill: () => Effect.void
+      } as unknown as CommandExecutor.Process
+    }),
+  string: () => Effect.succeed(""),
+  lines: () => Effect.succeed([]),
+  stream: () => Stream.empty,
+  streamLines: () => Stream.empty
+})
+
 const makeTestLayer = (testDir: string) =>
   ProjectStoreLive.pipe(
     Layer.provide(Layer.mergeAll(
       Layer.succeed(AppContext, AppContext.of({ projectRoot: "/tmp", configDir: testDir })),
       NodeContext.layer
+    ))
+  )
+
+const makeTestLayerWithExecutor = (testDir: string, executor: CommandExecutor.CommandExecutor) =>
+  ProjectStoreLive.pipe(
+    Layer.provide(Layer.mergeAll(
+      Layer.succeed(AppContext, AppContext.of({ projectRoot: "/tmp", configDir: testDir })),
+      Layer.succeed(CommandExecutor.CommandExecutor, executor),
+      NodeFileSystem.layer,
+      Path.layer
     ))
   )
 
@@ -156,21 +199,13 @@ describe("ProjectStore", () => {
       }).pipe(Effect.provide(testLayer))
     }))
 
-  it.effect("createProject appends to existing projects and writes file", () =>
+  it.live("createProject spawns lalph projects add and returns LalphProject", () =>
     Effect.gen(function*() {
       // Arrange
       const testDir = makeTestDir()
-      yield* writeProjectsFile(testDir, [
-        {
-          id: "proj-a",
-          enabled: true,
-          targetBranch: { _tag: "None" },
-          concurrency: 1,
-          gitFlow: "pr",
-          reviewAgent: false
-        }
-      ])
-      const testLayer = makeTestLayer(testDir)
+      const stdinChunks: Array<string> = []
+      const executor = makeFakeExecutor((data) => stdinChunks.push(data))
+      const testLayer = makeTestLayerWithExecutor(testDir, executor)
 
       yield* Effect.gen(function*() {
         const store = yield* ProjectStore
@@ -181,7 +216,9 @@ describe("ProjectStore", () => {
           targetBranch: Option.some("main"),
           concurrency: 2,
           gitFlow: "commit",
-          reviewAgent: true
+          reviewAgent: true,
+          labelFilter: "lalph",
+          autoMergeLabel: "auto-merge"
         })
 
         // Assert
@@ -192,19 +229,15 @@ describe("ProjectStore", () => {
         expect(newProject.gitFlow).toBe("commit")
         expect(newProject.reviewAgent).toBe(true)
         expect(Option.getOrNull(newProject.targetBranch)).toBe("main")
-
-        // Verify persistence — re-read
-        const allProjects = yield* store.listProjects
-        expect(allProjects).toHaveLength(2)
-        expect(allProjects[1]!.id).toBe("proj-new")
       }).pipe(Effect.provide(testLayer))
     }))
 
-  it.effect("createProject creates file when none exists", () =>
+  it.live("createProject returns correct LalphProject with defaults", () =>
     Effect.gen(function*() {
       // Arrange
       const testDir = makeTestDir()
-      const testLayer = makeTestLayer(testDir)
+      const executor = makeFakeExecutor()
+      const testLayer = makeTestLayerWithExecutor(testDir, executor)
 
       yield* Effect.gen(function*() {
         const store = yield* ProjectStore
@@ -220,8 +253,10 @@ describe("ProjectStore", () => {
 
         // Assert
         expect(newProject.id).toBe("first-project")
-        const projects = yield* store.listProjects
-        expect(projects).toHaveLength(1)
+        expect(newProject.enabled).toBe(true)
+        expect(newProject.gitFlow).toBe("pr")
+        expect(newProject.reviewAgent).toBe(false)
+        expect(Option.isNone(newProject.targetBranch)).toBe(true)
       }).pipe(Effect.provide(testLayer))
     }))
 
