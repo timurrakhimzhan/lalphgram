@@ -1838,7 +1838,12 @@ describe("project creation wizard", () => {
       yield* flush
 
       // Assert
-      expect(messengerMock.sendMessage).toHaveBeenCalledWith("Enter project name:")
+      expect(messengerMock.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Enter project name:",
+          options: [{ label: ABORT_BUTTON_LABEL }]
+        })
+      )
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({ text: "Concurrency (tasks in parallel):" })
       )

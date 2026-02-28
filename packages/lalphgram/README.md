@@ -59,7 +59,15 @@ Manage Claude coding plans directly from Telegram:
 
 - **New PRs** — alerts when PRs are opened
 - **Merge conflicts** — detects conflicts and posts a GitHub comment + Telegram alert
+- **Broken CI** — when CI checks fail on a PR, posts a GitHub comment listing the failed checks, moves the linked issue to "Todo" with urgent priority, and sends a Telegram alert
 - **New tasks** — notifies on Linear/GitHub issue creation and state changes
+
+### Comment Timer
+
+Monitors PR comments and moves linked issues back to "Todo":
+
+- **Keyword trigger** — if a comment contains the trigger keyword (default: `"urgent"`), immediately moves the issue to "Todo" with urgent priority
+- **Timer trigger** — any other comment starts a countdown (default: 300s). If no new comment arrives before it expires, the issue moves to "Todo" with urgent priority. Each new comment resets the timer
 
 ### Auto-Merge
 

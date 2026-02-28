@@ -351,7 +351,10 @@ export const chatMachine = Machine.make(
                 return reply(ChatState.SelectingProject())
               }
               if (text === NEW_PROJECT_BUTTON_LABEL) {
-                yield* notifier.sendMessage("Enter project name:")
+                yield* notifier.sendMessage({
+                  text: "Enter project name:",
+                  options: [{ label: ABORT_BUTTON_LABEL }]
+                })
                 return reply(ChatState.CreatingProject({
                   step: "Name",
                   data: {},
@@ -367,7 +370,10 @@ export const chatMachine = Machine.make(
                 return reply(ChatState.Idle())
               }
               if (text === NEW_PROJECT_BUTTON_LABEL) {
-                yield* notifier.sendMessage("Enter project name:")
+                yield* notifier.sendMessage({
+                  text: "Enter project name:",
+                  options: [{ label: ABORT_BUTTON_LABEL }]
+                })
                 return reply(ChatState.CreatingProject({
                   step: "Name",
                   data: {},
