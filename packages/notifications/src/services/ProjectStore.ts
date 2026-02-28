@@ -4,7 +4,7 @@
  */
 import { Command, CommandExecutor, FileSystem, Path } from "@effect/platform"
 import type { Option } from "effect"
-import { Context, Data, Duration, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Data, Effect, Layer, Queue, Schema, Stream } from "effect"
 import { LalphProject } from "../schemas/ProjectSchemas.js"
 import { AppContext } from "./AppContext.js"
 
@@ -116,7 +116,7 @@ export const ProjectStoreLive = Layer.effect(
     }) =>
       Effect.gen(function*() {
         const encoder = new TextEncoder()
-        const stdinLines: Array<string> = [
+        const answers: Array<string> = [
           data.id,
           String(data.concurrency),
           data.targetBranch._tag === "Some" ? data.targetBranch.value : "",
@@ -125,17 +125,6 @@ export const ProjectStoreLive = Layer.effect(
           data.labelFilter ?? "",
           data.autoMergeLabel ?? ""
         ]
-        // Send each line with a delay so each Prompt has time to set up its keypress listener.
-        // Each Effect Prompt creates a new keypress listener — events arriving before
-        // the listener is ready are lost.
-        const stdinStream = Stream.fromIterable(stdinLines).pipe(
-          Stream.mapEffect((line) =>
-            Effect.gen(function*() {
-              yield* Effect.sleep(Duration.millis(500))
-              return encoder.encode(line + "\n")
-            })
-          )
-        )
 
         const cmd = Command.make("lalph", "projects", "add").pipe(
           Command.workingDirectory(appContext.projectRoot),
@@ -150,24 +139,64 @@ export const ProjectStoreLive = Layer.effect(
               Effect.provideService(CommandExecutor.CommandExecutor, executor)
             )
 
-            yield* stdinStream.pipe(
+            // Queue-based stdin: send answer only when stdout shows a prompt ("?")
+            const stdinQueue = yield* Queue.unbounded<Uint8Array>()
+            yield* Stream.fromQueue(stdinQueue).pipe(
               Stream.run(process.stdin),
               Effect.forkDaemon
             )
 
-            // Drain stdout so the process doesn't block when the pipe buffer fills
-            yield* process.stdout.pipe(Stream.runDrain, Effect.forkDaemon)
+            let answerIndex = 0
+            let waitingForCompletion = false
+            yield* process.stdout.pipe(
+              Stream.map((chunk) => new TextDecoder().decode(chunk)),
+              Stream.tap((text) => {
+                if (waitingForCompletion) {
+                  // Wait for "✔" (prompt accepted) before looking for next prompt
+                  if (text.includes("\u2714") || text.includes("✔")) {
+                    waitingForCompletion = false
+                  }
+                  return Effect.void
+                }
+                if (text.includes("?") && answerIndex < answers.length) {
+                  const answer = answers[answerIndex] ?? ""
+                  answerIndex++
+                  waitingForCompletion = true
+                  return Queue.offer(stdinQueue, encoder.encode(answer + "\n")).pipe(
+                    Effect.tap(() =>
+                      Effect.log("Sent answer to prompt").pipe(
+                        Effect.annotateLogs({
+                          answerIndex: String(answerIndex),
+                          answer: answer.length > 0 ? answer : "(enter)"
+                        })
+                      )
+                    )
+                  )
+                }
+                return Effect.void
+              }),
+              Stream.runDrain,
+              Effect.forkDaemon
+            )
+
+            // Drain stderr so the process doesn't block when pipe buffer fills
+            const stderrChunks: Array<string> = []
+            yield* process.stderr.pipe(
+              Stream.map((chunk) => new TextDecoder().decode(chunk)),
+              Stream.tap((chunk) =>
+                Effect.sync(() => {
+                  stderrChunks.push(chunk)
+                })
+              ),
+              Stream.runDrain,
+              Effect.forkDaemon
+            )
 
             const exitCode = yield* process.exitCode
             if (exitCode !== 0) {
-              const stderr = yield* process.stderr.pipe(
-                Stream.map((chunk) => new TextDecoder().decode(chunk)),
-                Stream.runCollect,
-                Effect.map((chunks) => [...chunks].join(""))
-              )
               return yield* Effect.fail(
                 new ProjectStoreError({
-                  message: `lalph projects add failed (exit ${exitCode}): ${stderr}`,
+                  message: `lalph projects add failed (exit ${exitCode}): ${stderrChunks.join("")}`,
                   cause: null
                 })
               )

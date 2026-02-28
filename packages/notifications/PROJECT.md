@@ -346,7 +346,7 @@ Manages interactive Claude plan sessions via subprocess.
 
 | Method | Signature | Description |
 |---|---|---|
-| `start(planText, projectId?)` | `Effect<void>` | Save plan to temp file, spawn `lalph plan` subprocess. If projectId provided, sends it to stdin before plan text. |
+| `start(planText, projectId?, labelFilter?, autoMergeLabel?)` | `Effect<void>` | Save plan to temp file, spawn `lalph plan` subprocess. If projectId provided, pre-answers project selection, label filter, and auto-merge label prompts via stdin. |
 | `answer(text)` | `Effect<void>` | Send plain text answer to stdin (for ask_user responses) |
 | `sendFollowUp(text)` | `Effect<void>` | Send `{ type: "follow_up", text }` to stdin |
 | `interrupt(text)` | `Effect<void>` | Send `{ type: "shim_interrupt", text }` to stdin |

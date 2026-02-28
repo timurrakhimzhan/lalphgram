@@ -121,7 +121,9 @@ interface ActiveSession {
 export interface PlanSessionService {
   readonly start: (
     planText: string,
-    projectId?: string | undefined
+    projectId?: string | undefined,
+    labelFilter?: string | undefined,
+    autoMergeLabel?: string | undefined
   ) => Effect.Effect<void, PlanSessionError>
   readonly answer: (text: string) => Effect.Effect<void, PlanSessionError>
   readonly sendFollowUp: (text: string) => Effect.Effect<void, PlanSessionError>
@@ -211,7 +213,9 @@ export const PlanSessionLive = Layer.scoped(
 
     const start = (
       planText: string,
-      projectId?: string | undefined
+      projectId?: string | undefined,
+      labelFilter?: string | undefined,
+      autoMergeLabel?: string | undefined
     ) =>
       Effect.gen(function*() {
         const current = yield* Ref.get(sessionRef)
@@ -269,8 +273,14 @@ export const PlanSessionLive = Layer.scoped(
         if (projectId != null) {
           const encoder = new TextEncoder()
           yield* Queue.offer(stdinQueue, encoder.encode(projectId + "\n"))
-          yield* Effect.log("Pre-answered project selection").pipe(
-            Effect.annotateLogs({ projectId })
+          yield* Queue.offer(stdinQueue, encoder.encode((labelFilter ?? "") + "\n"))
+          yield* Queue.offer(stdinQueue, encoder.encode((autoMergeLabel ?? "") + "\n"))
+          yield* Effect.log("Pre-answered project prompts").pipe(
+            Effect.annotateLogs({
+              projectId,
+              labelFilter: labelFilter ?? "(empty)",
+              autoMergeLabel: autoMergeLabel ?? "(empty)"
+            })
           )
         }
 
@@ -624,7 +634,8 @@ export const PlanSessionLive = Layer.scoped(
     )
 
     return PlanSession.of({
-      start: (planText, projectId) => start(planText, projectId).pipe(Effect.annotateLogs({ service: "PlanSession" })),
+      start: (planText, projectId, labelFilter, autoMergeLabel) =>
+        start(planText, projectId, labelFilter, autoMergeLabel).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       answer: (text) => answer(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       sendFollowUp: (text) => sendFollowUp(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
       interrupt: (text) => interrupt(text).pipe(Effect.annotateLogs({ service: "PlanSession" })),
