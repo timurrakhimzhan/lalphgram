@@ -14,6 +14,7 @@ const testRepo = new GitHubRepo({
 })
 
 const makeOctokitMock = (): OctokitClientService => ({
+  getRateLimit: vi.fn(() => Effect.succeed({ limit: 5000, remaining: 5000, reset: 0 })),
   getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test-user" })),
   listUserRepos: vi.fn(() =>
     Effect.succeed([{

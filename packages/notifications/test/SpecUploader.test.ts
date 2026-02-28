@@ -17,6 +17,7 @@ describe("GistSpecUploaderLive", () => {
   it.effect("uploads HTML via createGist and returns htmlpreview URL", () => {
     // Arrange
     const octokitMock = OctokitClient.of({
+      getRateLimit: vi.fn(() => Effect.succeed({ limit: 5000, remaining: 5000, reset: 0 })),
       getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test" })),
       listUserRepos: vi.fn(() => Effect.succeed([])),
       listPulls: vi.fn(() => Effect.succeed([])),
@@ -74,6 +75,7 @@ describe("GistSpecUploaderLive", () => {
   it.effect("falls back to htmlUrl when spec.html rawUrl is missing", () => {
     // Arrange
     const octokitMock = OctokitClient.of({
+      getRateLimit: vi.fn(() => Effect.succeed({ limit: 5000, remaining: 5000, reset: 0 })),
       getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test" })),
       listUserRepos: vi.fn(() => Effect.succeed([])),
       listPulls: vi.fn(() => Effect.succeed([])),

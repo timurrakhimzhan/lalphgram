@@ -138,6 +138,7 @@ describe("LinearTracker", () => {
 
 const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): OctokitClientService =>
   OctokitClient.of({
+    getRateLimit: vi.fn(() => Effect.succeed({ limit: 5000, remaining: 5000, reset: 0 })),
     getAuthenticatedUser: vi.fn(() => Effect.succeed({ login: "test-user" })),
     listUserRepos: vi.fn(() => Effect.succeed([])),
     listPulls: vi.fn(() => Effect.succeed([])),

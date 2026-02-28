@@ -8,6 +8,37 @@ import { LalphConfig } from "./LalphConfig.js"
 
 /**
  * @since 1.0.0
+ */
+export const etagCache = new Map<string, { readonly etag: string; readonly response: unknown }>()
+
+const registerETagHooks = (client: Octokit) => {
+  client.hook.before("request", (options) => {
+    const key = `${options.method}:${options.url}`
+    const cached = etagCache.get(key)
+    if (cached) {
+      options.headers["if-none-match"] = cached.etag
+    }
+  })
+
+  client.hook.after("request", (response, options) => {
+    const etag = response.headers.etag
+    if (etag) {
+      etagCache.set(`${options.method}:${options.url}`, { etag, response })
+    }
+  })
+
+  client.hook.error("request", (error, options) => {
+    if ("status" in error && error.status === 304) {
+      const key = `${options.method}:${options.url}`
+      const cached = etagCache.get(key)
+      if (cached) return cached.response
+    }
+    throw error
+  })
+}
+
+/**
+ * @since 1.0.0
  * @category errors
  */
 export class OctokitClientError extends Data.TaggedError("OctokitClientError")<{
@@ -141,9 +172,20 @@ export interface OctokitGist {
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface OctokitRateLimit {
+  readonly limit: number
+  readonly remaining: number
+  readonly reset: number
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface OctokitClientService {
+  readonly getRateLimit: () => Effect.Effect<OctokitRateLimit, OctokitClientError>
   readonly getAuthenticatedUser: () => Effect.Effect<OctokitUser, OctokitClientError>
   readonly listUserRepos: (params: {
     readonly perPage: number
@@ -236,6 +278,7 @@ export const OctokitClientLive = Layer.effect(
 
     let currentToken = initialToken
     let octokit = new Octokit({ auth: currentToken })
+    registerETagHooks(octokit)
 
     const getClient = Effect.gen(function*() {
       const latestToken = yield* watcher.githubToken.pipe(
@@ -244,9 +287,25 @@ export const OctokitClientLive = Layer.effect(
       if (latestToken !== currentToken) {
         currentToken = latestToken
         octokit = new Octokit({ auth: latestToken })
+        registerETagHooks(octokit)
       }
       return octokit
     })
+
+    const getRateLimit = () =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () => client.rest.rateLimit.get(),
+          catch: (err) => new OctokitClientError({ message: `Failed to get rate limit: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.map((response): OctokitRateLimit => ({
+            limit: response.data.rate.limit,
+            remaining: response.data.rate.remaining,
+            reset: response.data.rate.reset
+          }))
+        )
+      })
 
     const getAuthenticatedUser = () =>
       Effect.gen(function*() {
@@ -609,6 +668,7 @@ export const OctokitClientLive = Layer.effect(
       })
 
     return OctokitClient.of({
+      getRateLimit,
       getAuthenticatedUser,
       listUserRepos,
       listPulls,
