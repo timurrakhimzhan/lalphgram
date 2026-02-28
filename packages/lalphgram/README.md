@@ -62,6 +62,17 @@ Manage Claude coding plans directly from Telegram:
 - **Broken CI** — when CI checks fail on a PR, posts a GitHub comment listing the failed checks, moves the linked issue to "Todo" with urgent priority, and sends a Telegram alert
 - **New tasks** — notifies on Linear/GitHub issue creation and state changes
 
+### Automatic Comments & Issue Re-queuing
+
+lalphgram posts comments on PRs automatically, prefixed with `[Automatic]`:
+
+- **`[Automatic] This PR has merge conflicts that need to be resolved.`** — posted when a conflict is detected
+- **`[Automatic] CI checks failed for this PR: ...`** — posted when CI checks fail, listing the failed check names
+
+Both of these also **move the linked issue back to "Todo"** with urgent priority. This is designed for use with [lalph](https://github.com/nicholasgriffintn/lalph) — when lalph finishes a task it moves the issue to "in-review", but if CI fails or conflicts arise, lalphgram moves it back to "Todo" so lalph picks it up again and fixes the problem.
+
+The `[Automatic]` prefix distinguishes bot comments from human comments, which matters for auto-merge (see below).
+
 ### Comment Timer
 
 Monitors PR comments and moves linked issues back to "Todo":
@@ -74,6 +85,7 @@ Monitors PR comments and moves linked issues back to "Todo":
 When enabled, monitors PRs and merges them automatically once:
 - All CI checks pass
 - A configurable cooldown period has elapsed since the last push
+- No manual (human) comments exist on the PR — any comment without the `[Automatic]` prefix disables auto-merge for that PR, since it indicates a human is engaged in review
 
 ## License
 
