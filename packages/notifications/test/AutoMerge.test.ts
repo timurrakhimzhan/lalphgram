@@ -133,7 +133,15 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
         })
       ),
       mergePR: vi.fn(() => Effect.succeed(undefined))
@@ -159,7 +167,15 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
         })
       )
     })
@@ -202,7 +218,15 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
         })
       ),
       mergePR: vi.fn(() => Effect.succeed(undefined))
@@ -228,7 +252,15 @@ describe("AutoMerge", () => {
       getCIStatus: vi.fn(() =>
         Effect.succeed({
           state: "success",
-          checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
         })
       ),
       mergePR: vi.fn(() => Effect.fail(new GitHubClientError({ message: "Merge conflict", cause: null })))
@@ -297,11 +329,10 @@ describe("AutoMerge", () => {
             status: "completed",
             conclusion: "failure",
             html_url: "",
-            output: {
-              title: "Billing issue",
-              summary:
-                "The job was not started because recent account payments have failed or your spending limit needs to be increased."
-            }
+            output: null,
+            annotationMessages: [
+              "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+            ]
           }]
         })
       ),
@@ -335,11 +366,10 @@ describe("AutoMerge", () => {
               status: "completed",
               conclusion: "failure",
               html_url: "",
-              output: {
-                title: "Billing issue",
-                summary:
-                  "The job was not started because recent account payments have failed or your spending limit needs to be increased."
-              }
+              output: null,
+              annotationMessages: [
+                "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+              ]
             },
             {
               id: 2,
@@ -347,7 +377,8 @@ describe("AutoMerge", () => {
               status: "completed",
               conclusion: "failure",
               html_url: "",
-              output: { title: "Lint failed", summary: "Found 3 errors" }
+              output: { title: "Lint failed", summary: "Found 3 errors" },
+              annotationMessages: []
             }
           ]
         })
@@ -381,11 +412,10 @@ describe("AutoMerge", () => {
               status: "completed",
               conclusion: "failure",
               html_url: "",
-              output: {
-                title: "Billing issue",
-                summary:
-                  "The job was not started because recent account payments have failed or your spending limit needs to be increased."
-              }
+              output: null,
+              annotationMessages: [
+                "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+              ]
             },
             {
               id: 2,
@@ -393,7 +423,8 @@ describe("AutoMerge", () => {
               status: "completed",
               conclusion: "success",
               html_url: "",
-              output: null
+              output: null,
+              annotationMessages: []
             }
           ]
         })
@@ -422,7 +453,15 @@ describe("AutoMerge", () => {
       .mockReturnValueOnce(Effect.succeed({ state: "pending", checkRuns: [] }))
       .mockReturnValueOnce(Effect.succeed({
         state: "success",
-        checkRuns: [{ id: 1, name: "build", status: "completed", conclusion: "success", html_url: "", output: null }]
+        checkRuns: [{
+          id: 1,
+          name: "build",
+          status: "completed",
+          conclusion: "success",
+          html_url: "",
+          output: null,
+          annotationMessages: []
+        }]
       }))
     const githubMock = makeGitHubClientMock({
       listOpenPRs: vi.fn(() => {

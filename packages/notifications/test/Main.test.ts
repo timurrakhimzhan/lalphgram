@@ -116,7 +116,8 @@ const makeEventSourcesFromEvents = (
 
 const makeMessengerMock = (incomingMessages?: Stream.Stream<IncomingMessage>) =>
   MessengerAdapter.of({
-    sendMessage: vi.fn(() => Effect.succeed(undefined)),
+    sendMessage: vi.fn(() => Effect.succeed({ id: "0" })),
+    editMessage: vi.fn(() => Effect.void),
     incomingMessages: incomingMessages ?? Stream.empty
   })
 
@@ -173,6 +174,7 @@ const makeOctokitClientMock = (overrides?: Partial<OctokitClientService>) =>
     listPullReviewComments: vi.fn(() => Effect.succeed([])),
     getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
     listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+    listCheckRunAnnotations: vi.fn(() => Effect.succeed([])),
     mergePull: vi.fn(() => Effect.succeed({ sha: "", merged: true, message: "" })),
     createGist: vi.fn(() =>
       Effect.succeed({
@@ -514,8 +516,9 @@ describe("event loop dispatch", () => {
         if (callCount.value === 2) {
           return Effect.fail(new MessengerAdapterError({ message: "API error", cause: null }))
         }
-        return Effect.succeed(undefined)
+        return Effect.succeed({ id: "0" })
       }),
+      editMessage: vi.fn(() => Effect.void),
       incomingMessages: Stream.empty
     })
     const { layer } = makeTestLayer([event1], { messengerMock, autoMergeEvents: [event2] })

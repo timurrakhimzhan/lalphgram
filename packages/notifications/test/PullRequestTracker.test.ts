@@ -99,6 +99,7 @@ const makeGitHubClientMock = (overrides: Partial<{
       conclusion: string | null
       html_url: string
       output: { title: string | null; summary: string | null } | null
+      annotationMessages: ReadonlyArray<string>
     }>
   }, GitHubClientError>
   postComment: (repo: GitHubRepo, prNumber: number, body: string) => Effect.Effect<void, GitHubClientError>
@@ -422,9 +423,18 @@ describe("PullRequestTracker", () => {
               status: "completed",
               conclusion: "failure",
               html_url: "https://example.com/run/1",
-              output: null
+              output: null,
+              annotationMessages: []
             },
-            { id: 2, name: "lint", status: "completed", conclusion: "success", html_url: "", output: null }
+            {
+              id: 2,
+              name: "lint",
+              status: "completed",
+              conclusion: "success",
+              html_url: "",
+              output: null,
+              annotationMessages: []
+            }
           ]
         })
       ),
@@ -458,7 +468,15 @@ describe("PullRequestTracker", () => {
         Effect.succeed({
           state: "failure",
           checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "", output: null }
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "",
+              output: null,
+              annotationMessages: []
+            }
           ]
         })
       ),
@@ -473,6 +491,44 @@ describe("PullRequestTracker", () => {
         const ciFailedEvents = events.filter((e) => e._tag === "PRCIFailed")
         expect(ciFailedEvents).toHaveLength(1)
         expect(postCommentMock).toHaveBeenCalledTimes(1)
+      })
+    )
+  })
+
+  it.live("does not emit PRCIFailed when all failures are billing issues", () => {
+    // Arrange
+    const pr = makePR({ id: 100 })
+    const postCommentMock = vi.fn(() => Effect.succeed(undefined))
+    const mock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([pr])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "failure",
+          checkRuns: [
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "https://example.com/run/1",
+              output: null,
+              annotationMessages: [
+                "Your recent account payments have failed or your spending limit needs to be increased."
+              ]
+            }
+          ]
+        })
+      ),
+      postComment: postCommentMock
+    })
+
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(mock)),
+      Effect.map((events) => {
+        // Assert
+        expect(events.filter((e) => e._tag === "PRCIFailed")).toHaveLength(0)
+        expect(postCommentMock).not.toHaveBeenCalled()
       })
     )
   })
@@ -493,7 +549,15 @@ describe("PullRequestTracker", () => {
         Effect.succeed({
           state: "failure",
           checkRuns: [
-            { id: 1, name: "build", status: "completed", conclusion: "failure", html_url: "", output: null }
+            {
+              id: 1,
+              name: "build",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "",
+              output: null,
+              annotationMessages: []
+            }
           ]
         })
       ),

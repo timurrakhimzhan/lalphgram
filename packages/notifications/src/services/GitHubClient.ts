@@ -26,6 +26,7 @@ export interface GitHubCheckRun {
   readonly conclusion: string | null
   readonly html_url: string
   readonly output: { readonly title: string | null; readonly summary: string | null } | null
+  readonly annotationMessages: ReadonlyArray<string>
 }
 
 /**
@@ -35,6 +36,27 @@ export interface GitHubCheckRun {
 export interface GitHubCIStatus {
   readonly state: string
   readonly checkRuns: ReadonlyArray<GitHubCheckRun>
+}
+
+/**
+ * @since 1.0.0
+ * @category predicates
+ */
+export const isBillingFailure = (checkRun: {
+  readonly conclusion: string | null
+  readonly output: { readonly summary: string | null } | null
+  readonly annotationMessages: ReadonlyArray<string>
+}) => {
+  if (checkRun.conclusion !== "failure") return false
+
+  const hasBillingText = (text: string) =>
+    text.includes("account payments have failed") || text.includes("spending limit")
+
+  if (checkRun.output?.summary != null && hasBillingText(checkRun.output.summary)) {
+    return true
+  }
+
+  return checkRun.annotationMessages.some(hasBillingText)
 }
 
 /**
@@ -236,17 +258,39 @@ export const GitHubClientLive = Layer.effect(
         combinedStatus: octokit.getCombinedStatusForRef({ owner, repo: repoName, ref }),
         checkRuns: octokit.listCheckRunsForRef({ owner, repo: repoName, ref })
       }).pipe(
-        Effect.map(({ checkRuns, combinedStatus }) => ({
-          state: combinedStatus.state,
-          checkRuns: Array.map(checkRuns, (cr) => ({
-            id: cr.id,
-            name: cr.name,
-            status: cr.status,
-            conclusion: cr.conclusion,
-            html_url: cr.htmlUrl,
-            output: cr.output
-          }))
-        })),
+        Effect.flatMap(({ checkRuns, combinedStatus }) =>
+          Effect.forEach(checkRuns, (cr) => {
+            if (cr.conclusion === "failure") {
+              return octokit.listCheckRunAnnotations({ owner, repo: repoName, checkRunId: cr.id }).pipe(
+                Effect.map((annotations): GitHubCheckRun => ({
+                  id: cr.id,
+                  name: cr.name,
+                  status: cr.status,
+                  conclusion: cr.conclusion,
+                  html_url: cr.htmlUrl,
+                  output: cr.output,
+                  annotationMessages: Array.map(annotations, (a) => a.message)
+                }))
+              )
+            }
+            return Effect.succeed(
+              {
+                id: cr.id,
+                name: cr.name,
+                status: cr.status,
+                conclusion: cr.conclusion,
+                html_url: cr.htmlUrl,
+                output: cr.output,
+                annotationMessages: []
+              } satisfies GitHubCheckRun
+            )
+          }).pipe(
+            Effect.map((enrichedCheckRuns) => ({
+              state: combinedStatus.state,
+              checkRuns: enrichedCheckRuns
+            }))
+          )
+        ),
         Effect.mapError((err) =>
           new GitHubClientError({
             message: `Failed to get CI status for ${repo.full_name} ref ${ref}: ${err.message}`,

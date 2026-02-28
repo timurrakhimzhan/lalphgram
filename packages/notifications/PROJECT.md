@@ -96,10 +96,12 @@ Reads credentials from `~/.lalph/config/` files. Watches file system for token c
 
 | Method | Signature | Description |
 |---|---|---|
-| `sendMessage` | `(string \| OutgoingMessage) => Effect<void>` | Send to Telegram. Supports inline/reply keyboards. |
+| `sendMessage` | `(string \| OutgoingMessage) => Effect<SentMessage>` | Send to Telegram. Returns `SentMessage` with message ID. Supports inline/reply keyboards. |
+| `editMessage` | `(messageId: string, string \| OutgoingMessage) => Effect<void>` | Edit an existing message. String removes inline keyboard; `OutgoingMessage` with `options` replaces buttons. |
 | `incomingMessages` | `Stream<IncomingMessage>` | Queue-backed stream of text messages + button clicks |
 
 **Types**:
+- `SentMessage`: `{ id: string }` — returned by `sendMessage`, wraps Telegram `message_id`
 - `IncomingMessage`: `{ chatId, text, from }`
 - `OutgoingMessage`: `{ text, options?: [{ label }], replyKeyboard?: [[{ text }]] }`
 
@@ -115,6 +117,7 @@ Low-level Octokit SDK wrapper. Dynamically refreshes if GitHub token changes.
 
 | Method | Description |
 |---|---|
+| `getRateLimit()` | Returns `OctokitRateLimit` (`{ limit, remaining, reset }`) |
 | `getAuthenticatedUser()` | Returns `{ login }` |
 | `listUserRepos(opts)` | List repos |
 | `listPulls(owner, repo, state, perPage)` | List PRs |
@@ -124,13 +127,16 @@ Low-level Octokit SDK wrapper. Dynamically refreshes if GitHub token changes.
 | `listPullReviewComments(...)` | List review comments |
 | `getCombinedStatusForRef(...)` | Get commit status |
 | `listCheckRunsForRef(...)` | Get check runs |
+| `listCheckRunAnnotations(owner, repo, checkRunId)` | Get annotations for a check run |
 | `mergePull(...)` | Merge a PR |
 | `listUserIssues(...)` | List issues assigned to user |
 | `getIssue(...)` | Get single issue |
 | `addIssueLabels(...)` | Add labels to issue |
 | `createGist(...)` | Create a GitHub Gist (description, files, isPublic) → `OctokitGist` |
 
-**Models**: `OctokitUser`, `OctokitRepo`, `OctokitPullRequest`, `OctokitPullRequestDetail`, `OctokitComment`, `OctokitIssue`, `OctokitIssueDetail`, `OctokitCheckRun`, `OctokitCombinedStatus`, `OctokitMergeResult`, `OctokitGist` (`{ id, htmlUrl, files: Record<string, { rawUrl }> }`)
+**Models**: `OctokitUser`, `OctokitRepo`, `OctokitPullRequest`, `OctokitPullRequestDetail`, `OctokitComment`, `OctokitIssue`, `OctokitIssueDetail`, `OctokitCheckRun`, `OctokitCheckRunAnnotation` (`{ annotationLevel, message }`), `OctokitCombinedStatus`, `OctokitMergeResult`, `OctokitGist` (`{ id, htmlUrl, files: Record<string, { rawUrl }> }`), `OctokitRateLimit` (`{ limit, remaining, reset }`)
+
+**ETag caching**: `etagCache` (module-level `Map`) stores ETags per request key. `registerETagHooks` installs Octokit hooks to send `If-None-Match` headers and return cached responses on 304.
 
 **Error**: `OctokitClientError`
 **Layer**: `OctokitClientLive` — requires `LalphConfig`
@@ -151,8 +157,11 @@ Higher-level wrapper around `OctokitClient` with normalized response types.
 | `postComment(repo, prNumber, body)` | void |
 | `listComments(repo, prNumber)` | `GitHubComment[]` |
 | `listReviewComments(repo, prNumber)` | `GitHubComment[]` |
-| `getCIStatus(repo, ref)` | `{ state, checkRuns[] }` |
+| `getCIStatus(repo, ref)` | `{ state, checkRuns[] }` — fetches annotations for failed check runs |
 | `mergePR(repo, prNumber)` | void |
+
+**Predicates**:
+- `isBillingFailure(checkRun)` — Returns `true` if a check run failed due to GitHub billing issues (checks both `output.summary` and `annotationMessages` for "account payments have failed" or "spending limit"). Shared by `PullRequestTracker` and `AutoMerge`.
 
 **Error**: `GitHubClientError`
 **Layer**: `GitHubClientLive` — requires `OctokitClient`, `LalphConfig`
@@ -171,6 +180,8 @@ Polls GitHub at configured interval. Emits events for new PRs, conflicts, CI fai
 **Events emitted**: `PROpened`, `PRConflictDetected`, `PRCommentAdded`, `PRCIFailed`
 
 **Internal state**: `HashSet<prId>` for known PRs, `HashMap<prId, conflictState>`, `HashMap<prId+sha, ciState>`. Only emits after first poll cycle (avoids flooding on startup).
+
+**Billing failure filtering**: CI check runs that failed due to GitHub billing issues are silently ignored — they don't trigger `PRCIFailed` events or failure comments (uses `isBillingFailure` from `GitHubClient`).
 
 **Error**: `PullRequestTrackerError`
 **Layer**: `PullRequestTrackerLive` — requires `GitHubClient`, `AppRuntimeConfig`, `LalphConfig`

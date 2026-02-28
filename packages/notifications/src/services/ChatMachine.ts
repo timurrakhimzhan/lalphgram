@@ -89,6 +89,7 @@ export type ChatState = Data.TaggedEnum<{
     readonly pendingOptionLabels: ReadonlySet<string>
     readonly answersBuffer: ReadonlyArray<string>
     readonly awaitingFreeTextAnswer: boolean
+    readonly customAnswerMessageId: Option.Option<string>
     readonly lastQuestionMessage: Option.Option<OutgoingMessage>
     readonly readyFlags: ReadyFlags
     readonly analysisFollowUpSent: boolean
@@ -123,6 +124,7 @@ const initialSessionRunning = (projectId: string, planType: string): ChatState =
     pendingOptionLabels: new Set(),
     answersBuffer: [],
     awaitingFreeTextAnswer: false,
+    customAnswerMessageId: Option.none(),
     lastQuestionMessage: Option.none(),
     readyFlags: new ReadyFlags({ spec: false, analysis: false, idle: false }),
     analysisFollowUpSent: false
@@ -455,17 +457,33 @@ export const chatMachine = Machine.make(
               }
               if (state.pendingAnswerCount > 0 && state.pendingOptionLabels.has(text)) {
                 if (text === MY_ANSWER_BUTTON_LABEL) {
-                  yield* notifier.sendMessage({
+                  const sent = yield* notifier.sendMessage({
                     text: "Type your answer:",
                     options: [{ label: BACK_BUTTON_LABEL }]
                   })
-                  return reply(ChatState.SessionRunning({ ...state, awaitingFreeTextAnswer: true }))
+                  return reply(ChatState.SessionRunning({
+                    ...state,
+                    awaitingFreeTextAnswer: true,
+                    customAnswerMessageId: Option.some(sent.id)
+                  }))
                 }
                 if (text === BACK_BUTTON_LABEL) {
+                  if (!state.awaitingFreeTextAnswer) {
+                    return reply(state)
+                  }
+                  if (Option.isSome(state.customAnswerMessageId)) {
+                    yield* notifier.editMessage(state.customAnswerMessageId.value, "Cancelled").pipe(
+                      Effect.orElseSucceed(() => undefined)
+                    )
+                  }
                   if (Option.isSome(state.lastQuestionMessage)) {
                     yield* notifier.sendMessage(state.lastQuestionMessage.value)
                   }
-                  return reply(ChatState.SessionRunning({ ...state, awaitingFreeTextAnswer: false }))
+                  return reply(ChatState.SessionRunning({
+                    ...state,
+                    awaitingFreeTextAnswer: false,
+                    customAnswerMessageId: Option.none()
+                  }))
                 }
                 const newBuffer = [...state.answersBuffer, text]
                 const newPending = state.pendingAnswerCount - 1
@@ -475,6 +493,7 @@ export const chatMachine = Machine.make(
                   return reply(ChatState.SessionRunning({
                     ...state,
                     awaitingFreeTextAnswer: false,
+                    customAnswerMessageId: Option.none(),
                     answersBuffer: [],
                     pendingAnswerCount: 0,
                     pendingOptionLabels: new Set(),
@@ -490,6 +509,11 @@ export const chatMachine = Machine.make(
                 }))
               }
               if (state.awaitingFreeTextAnswer) {
+                if (Option.isSome(state.customAnswerMessageId)) {
+                  yield* notifier.editMessage(state.customAnswerMessageId.value, "Answer received ✓").pipe(
+                    Effect.orElseSucceed(() => undefined)
+                  )
+                }
                 const newBuffer = [...state.answersBuffer, text]
                 const newPending = state.pendingAnswerCount - 1
                 if (newPending <= 0) {
@@ -498,6 +522,7 @@ export const chatMachine = Machine.make(
                   return reply(ChatState.SessionRunning({
                     ...state,
                     awaitingFreeTextAnswer: false,
+                    customAnswerMessageId: Option.none(),
                     answersBuffer: [],
                     pendingAnswerCount: 0,
                     pendingOptionLabels: new Set(),
@@ -508,6 +533,7 @@ export const chatMachine = Machine.make(
                 return reply(ChatState.SessionRunning({
                   ...state,
                   awaitingFreeTextAnswer: false,
+                  customAnswerMessageId: Option.none(),
                   answersBuffer: newBuffer,
                   pendingAnswerCount: newPending
                 }))
@@ -549,6 +575,7 @@ export const chatMachine = Machine.make(
                   pendingOptionLabels: new Set(),
                   answersBuffer: [],
                   awaitingFreeTextAnswer: false,
+                  customAnswerMessageId: Option.none(),
                   lastQuestionMessage: Option.none(),
                   readyFlags: new ReadyFlags({ ...state.readyFlags, idle: false }),
                   analysisFollowUpSent: state.analysisFollowUpSent
@@ -568,6 +595,7 @@ export const chatMachine = Machine.make(
                   pendingOptionLabels: new Set(),
                   answersBuffer: [],
                   awaitingFreeTextAnswer: false,
+                  customAnswerMessageId: Option.none(),
                   lastQuestionMessage: Option.none(),
                   readyFlags: new ReadyFlags({ ...state.readyFlags, idle: false }),
                   analysisFollowUpSent: state.analysisFollowUpSent
@@ -583,6 +611,7 @@ export const chatMachine = Machine.make(
                   pendingOptionLabels: new Set(),
                   answersBuffer: [],
                   awaitingFreeTextAnswer: false,
+                  customAnswerMessageId: Option.none(),
                   lastQuestionMessage: Option.none(),
                   readyFlags: state.readyFlags,
                   analysisFollowUpSent: state.analysisFollowUpSent
@@ -622,6 +651,7 @@ export const chatMachine = Machine.make(
                   pendingOptionLabels: new Set(),
                   answersBuffer: [],
                   awaitingFreeTextAnswer: false,
+                  customAnswerMessageId: Option.none(),
                   lastQuestionMessage: Option.none(),
                   readyFlags: new ReadyFlags({ ...state.readyFlags, idle: false }),
                   analysisFollowUpSent: state.analysisFollowUpSent
@@ -814,6 +844,7 @@ export const chatMachine = Machine.make(
             pendingOptionLabels: newPendingLabels,
             answersBuffer: [],
             awaitingFreeTextAnswer: false,
+            customAnswerMessageId: Option.none(),
             lastQuestionMessage: lastQ
           }))
         }).pipe(

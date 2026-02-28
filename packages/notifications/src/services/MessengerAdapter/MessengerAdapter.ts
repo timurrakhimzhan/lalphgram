@@ -36,10 +36,22 @@ export interface OutgoingMessage {
 
 /**
  * @since 1.0.0
+ * @category models
+ */
+export interface SentMessage {
+  readonly id: string
+}
+
+/**
+ * @since 1.0.0
  * @category services
  */
 export interface MessengerAdapterService {
-  readonly sendMessage: (message: string | OutgoingMessage) => Effect.Effect<void, MessengerAdapterError>
+  readonly sendMessage: (message: string | OutgoingMessage) => Effect.Effect<SentMessage, MessengerAdapterError>
+  readonly editMessage: (
+    messageId: string,
+    message: string | OutgoingMessage
+  ) => Effect.Effect<void, MessengerAdapterError>
   readonly incomingMessages: Stream.Stream<IncomingMessage, MessengerAdapterError>
 }
 

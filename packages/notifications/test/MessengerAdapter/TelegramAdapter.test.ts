@@ -10,6 +10,7 @@ import { TelegramAdapterLive } from "../../src/services/MessengerAdapter/Telegra
 import { TelegramConfig, TelegramConfigSchema } from "../../src/services/TelegramConfig.js"
 
 const sendMessageMock = vi.fn().mockResolvedValue({ message_id: 1 })
+const editMessageTextMock = vi.fn().mockResolvedValue(true)
 const launchMock = vi.fn().mockResolvedValue(undefined)
 const stopMock = vi.fn()
 const onMock = vi.fn()
@@ -17,7 +18,7 @@ const actionMock = vi.fn()
 
 vi.mock("telegraf", () => ({
   Telegraf: vi.fn().mockImplementation(() => ({
-    telegram: { sendMessage: sendMessageMock },
+    telegram: { sendMessage: sendMessageMock, editMessageText: editMessageTextMock },
     launch: launchMock,
     stop: stopMock,
     on: onMock,
@@ -52,10 +53,10 @@ const storeNoChatIdLayer = Layer.succeed(TelegramConfig, makeStoreWithConfig(con
 describe("MessengerAdapter", () => {
   it.effect("sendMessage delegates to the adapter implementation", () => {
     // Arrange
-    const sendMessageFn = vi.fn(() => Effect.succeed(undefined))
+    const sendMessageFn = vi.fn(() => Effect.succeed({ id: "0" }))
     const mockAdapter = MessengerAdapter.of({
       sendMessage: sendMessageFn,
-
+      editMessage: vi.fn(() => Effect.void),
       incomingMessages: Stream.empty
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -78,7 +79,7 @@ describe("MessengerAdapter", () => {
     // Arrange
     const mockAdapter = MessengerAdapter.of({
       sendMessage: vi.fn(() => Effect.fail(new MessengerAdapterError({ message: "Send failed", cause: null }))),
-
+      editMessage: vi.fn(() => Effect.void),
       incomingMessages: Stream.empty
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -103,8 +104,8 @@ describe("MessengerAdapter", () => {
     const msg1 = new IncomingMessage({ chatId: "123", text: "Hello", from: "alice" })
     const msg2 = new IncomingMessage({ chatId: "123", text: "World", from: "bob" })
     const mockAdapter = MessengerAdapter.of({
-      sendMessage: vi.fn(() => Effect.succeed(undefined)),
-
+      sendMessage: vi.fn(() => Effect.succeed({ id: "0" })),
+      editMessage: vi.fn(() => Effect.void),
       incomingMessages: Stream.make(msg1, msg2)
     })
     const layer = Layer.succeed(MessengerAdapter, mockAdapter)
@@ -127,13 +128,14 @@ describe("MessengerAdapter", () => {
 describe("TelegramAdapterLive", () => {
   beforeEach(() => {
     sendMessageMock.mockClear()
+    editMessageTextMock.mockClear()
     launchMock.mockClear()
     stopMock.mockClear()
     onMock.mockClear()
     actionMock.mockClear()
   })
 
-  it.effect("sendMessage calls bot.telegram.sendMessage with correct parameters", () => {
+  it.effect("sendMessage calls bot.telegram.sendMessage and returns SentMessage", () => {
     // Arrange
     const layer = TelegramAdapterLive.pipe(
       Layer.provide(storeWithChatIdLayer)
@@ -144,10 +146,11 @@ describe("TelegramAdapterLive", () => {
       const adapter = yield* MessengerAdapter
 
       // Act
-      yield* adapter.sendMessage("Hello from test")
+      const result = yield* adapter.sendMessage("Hello from test")
 
       // Assert
       expect(sendMessageMock).toHaveBeenCalledWith("12345", "Hello from test", { parse_mode: "HTML" })
+      expect(result).toEqual({ id: "1" })
     }).pipe(
       Effect.provide(layer),
       Effect.scoped
@@ -230,6 +233,55 @@ describe("TelegramAdapterLive", () => {
       expect([...messages]).toEqual([
         new IncomingMessage({ chatId: "67890", text: "Hello from user", from: "testuser" })
       ])
+    }).pipe(
+      Effect.provide(layer),
+      Effect.scoped
+    )
+  })
+
+  it.effect("editMessage calls bot.telegram.editMessageText and removes inline keyboard", () => {
+    // Arrange
+    const layer = TelegramAdapterLive.pipe(
+      Layer.provide(storeWithChatIdLayer)
+    )
+
+    return Effect.gen(function*() {
+      // Arrange
+      const adapter = yield* MessengerAdapter
+
+      // Act
+      yield* adapter.editMessage("42", "Answer received ✓")
+
+      // Assert
+      expect(editMessageTextMock).toHaveBeenCalledWith(
+        "12345",
+        42,
+        undefined,
+        "Answer received ✓",
+        { reply_markup: { inline_keyboard: [] }, parse_mode: "HTML" }
+      )
+    }).pipe(
+      Effect.provide(layer),
+      Effect.scoped
+    )
+  })
+
+  it.effect("editMessage fails when chatId not configured", () => {
+    // Arrange
+    const layer = TelegramAdapterLive.pipe(
+      Layer.provide(storeNoChatIdLayer)
+    )
+
+    return Effect.gen(function*() {
+      // Arrange
+      const adapter = yield* MessengerAdapter
+
+      // Act
+      const error = yield* adapter.editMessage("42", "text").pipe(Effect.flip)
+
+      // Assert
+      expect(error).toBeInstanceOf(MessengerAdapterError)
+      expect(error.message).toContain("not configured")
     }).pipe(
       Effect.provide(layer),
       Effect.scoped

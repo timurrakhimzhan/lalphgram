@@ -66,10 +66,11 @@ const makeTrackerMock = (overrides: Partial<{
 })
 
 const makeMessengerMock = (overrides: Partial<{
-  sendMessage: (message: string | OutgoingMessage) => Effect.Effect<void, MessengerAdapterError>
+  sendMessage: (message: string | OutgoingMessage) => Effect.Effect<{ id: string }, MessengerAdapterError>
 }> = {}) =>
   MessengerAdapter.of({
-    sendMessage: overrides.sendMessage ?? vi.fn(() => Effect.succeed(undefined)),
+    sendMessage: overrides.sendMessage ?? vi.fn(() => Effect.succeed({ id: "0" })),
+    editMessage: vi.fn(() => Effect.void),
     incomingMessages: Stream.empty
   })
 

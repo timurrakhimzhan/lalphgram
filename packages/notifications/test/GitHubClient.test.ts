@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { GitHubRepo } from "../src/schemas/GitHubSchemas.js"
-import { GitHubClient, GitHubClientError, GitHubClientLive } from "../src/services/GitHubClient.js"
+import { GitHubClient, GitHubClientError, GitHubClientLive, isBillingFailure } from "../src/services/GitHubClient.js"
 import type { OctokitClientService } from "../src/services/OctokitClient.js"
 import { OctokitClient, OctokitClientError } from "../src/services/OctokitClient.js"
 
@@ -79,6 +79,7 @@ const makeOctokitMock = (): OctokitClientService => ({
   ),
   getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
   listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+  listCheckRunAnnotations: vi.fn(() => Effect.succeed([])),
   mergePull: vi.fn(() => Effect.succeed({ sha: "abc123", merged: true, message: "Pull Request successfully merged" })),
   createGist: vi.fn(() => Effect.succeed({ id: "1", htmlUrl: "https://gist.github.com/1", files: {} }))
 })
@@ -298,6 +299,7 @@ describe("GitHubClient", () => {
       expect(ciStatus.checkRuns[0]?.status).toBe("completed")
       expect(ciStatus.checkRuns[0]?.conclusion).toBe("success")
       expect(ciStatus.checkRuns[0]?.html_url).toBe("https://github.com/owner/my-repo/runs/1")
+      expect(ciStatus.checkRuns[0]?.annotationMessages).toEqual([])
       expect(mock.getCombinedStatusForRef).toHaveBeenCalledWith({
         owner: "owner",
         repo: "my-repo",
@@ -387,5 +389,87 @@ describe("GitHubClient", () => {
       expect(result).toBeInstanceOf(GitHubClientError)
       expect(result.message).toContain("Failed to get authenticated user")
     }).pipe(Effect.provide(makeTestLayer(mock)))
+  })
+})
+
+describe("isBillingFailure", () => {
+  it("returns false for non-failure conclusion", () => {
+    // Arrange
+    const checkRun = {
+      conclusion: "success",
+      output: { summary: "account payments have failed" },
+      annotationMessages: []
+    }
+
+    // Act
+    const result = isBillingFailure(checkRun)
+
+    // Assert
+    expect(result).toBe(false)
+  })
+
+  it("returns true when output.summary contains billing text", () => {
+    // Arrange
+    const checkRun = {
+      conclusion: "failure",
+      output: {
+        summary:
+          "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+      },
+      annotationMessages: []
+    }
+
+    // Act
+    const result = isBillingFailure(checkRun)
+
+    // Assert
+    expect(result).toBe(true)
+  })
+
+  it("returns true when annotationMessages contain billing text", () => {
+    // Arrange
+    const checkRun = {
+      conclusion: "failure",
+      output: null,
+      annotationMessages: [
+        "The job running on runner GitHub Actions has exceeded the spending limit of the account payments have failed."
+      ]
+    }
+
+    // Act
+    const result = isBillingFailure(checkRun)
+
+    // Assert
+    expect(result).toBe(true)
+  })
+
+  it("returns true when annotationMessages contain spending limit text", () => {
+    // Arrange
+    const checkRun = {
+      conclusion: "failure",
+      output: null,
+      annotationMessages: ["Your spending limit has been reached."]
+    }
+
+    // Act
+    const result = isBillingFailure(checkRun)
+
+    // Assert
+    expect(result).toBe(true)
+  })
+
+  it("returns false when failure has no billing text anywhere", () => {
+    // Arrange
+    const checkRun = {
+      conclusion: "failure",
+      output: { summary: "Build failed with 3 errors" },
+      annotationMessages: ["Error: tests failed"]
+    }
+
+    // Act
+    const result = isBillingFailure(checkRun)
+
+    // Assert
+    expect(result).toBe(false)
   })
 })

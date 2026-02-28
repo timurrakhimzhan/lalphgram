@@ -45,6 +45,7 @@ describe("GistPlanOverviewUploaderLive", () => {
       listPullReviewComments: vi.fn(() => Effect.succeed([])),
       getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
       listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+      listCheckRunAnnotations: vi.fn(() => Effect.succeed([])),
       mergePull: vi.fn(() => Effect.succeed({ sha: "", merged: true, message: "" })),
       createGist: vi.fn(() =>
         Effect.succeed({
@@ -103,6 +104,7 @@ describe("GistPlanOverviewUploaderLive", () => {
       listPullReviewComments: vi.fn(() => Effect.succeed([])),
       getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
       listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
+      listCheckRunAnnotations: vi.fn(() => Effect.succeed([])),
       mergePull: vi.fn(() => Effect.succeed({ sha: "", merged: true, message: "" })),
       createGist: vi.fn(() =>
         Effect.succeed({

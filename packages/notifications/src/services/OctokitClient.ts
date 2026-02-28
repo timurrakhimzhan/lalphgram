@@ -143,6 +143,15 @@ export interface OctokitCheckRun {
  * @since 1.0.0
  * @category models
  */
+export interface OctokitCheckRunAnnotation {
+  readonly annotationLevel: string
+  readonly message: string
+}
+
+/**
+ * @since 1.0.0
+ * @category models
+ */
 export interface OctokitCombinedStatus {
   readonly state: string
   readonly statuses: ReadonlyArray<{
@@ -247,6 +256,11 @@ export interface OctokitClientService {
     readonly repo: string
     readonly ref: string
   }) => Effect.Effect<ReadonlyArray<OctokitCheckRun>, OctokitClientError>
+  readonly listCheckRunAnnotations: (params: {
+    readonly owner: string
+    readonly repo: string
+    readonly checkRunId: number
+  }) => Effect.Effect<ReadonlyArray<OctokitCheckRunAnnotation>, OctokitClientError>
   readonly mergePull: (params: {
     readonly owner: string
     readonly repo: string
@@ -615,6 +629,35 @@ export const OctokitClientLive = Layer.effect(
         )
       })
 
+    const listCheckRunAnnotations = (params: {
+      readonly owner: string
+      readonly repo: string
+      readonly checkRunId: number
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.checks.listAnnotations({
+              owner: params.owner,
+              repo: params.repo,
+              check_run_id: params.checkRunId
+            }),
+          catch: (err) =>
+            new OctokitClientError({
+              message: `Failed to list check run annotations: ${String(err)}`,
+              cause: err
+            })
+        }).pipe(
+          Effect.map((response) =>
+            response.data.map((a): OctokitCheckRunAnnotation => ({
+              annotationLevel: a.annotation_level ?? "",
+              message: a.message ?? ""
+            }))
+          )
+        )
+      })
+
     const mergePull = (params: {
       readonly owner: string
       readonly repo: string
@@ -683,6 +726,7 @@ export const OctokitClientLive = Layer.effect(
       listPullReviewComments,
       getCombinedStatusForRef,
       listCheckRunsForRef,
+      listCheckRunAnnotations,
       mergePull,
       createGist
     })

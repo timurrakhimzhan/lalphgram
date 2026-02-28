@@ -8,7 +8,7 @@ import type { PullRequestEvent } from "../Events.js"
 import type { GitHubPullRequest, GitHubRepo } from "../schemas/GitHubSchemas.js"
 import { GitHubRepo as GitHubRepoClass } from "../schemas/GitHubSchemas.js"
 import { AppRuntimeConfig } from "./AppRuntimeConfig.js"
-import { GitHubClient } from "./GitHubClient.js"
+import { GitHubClient, isBillingFailure } from "./GitHubClient.js"
 import { LalphConfig } from "./LalphConfig.js"
 
 /**
@@ -51,12 +51,20 @@ const makeRepoFromFullName = (fullName: string) =>
     html_url: ""
   })
 
-const isCIFailed = (state: string, checkRuns: ReadonlyArray<{ readonly conclusion: string | null }>) => {
+const isCIFailed = (
+  state: string,
+  checkRuns: ReadonlyArray<{
+    readonly conclusion: string | null
+    readonly output: { readonly summary: string | null } | null
+    readonly annotationMessages: ReadonlyArray<string>
+  }>
+) => {
+  const nonBillingRuns = Array.filter(checkRuns, (cr) => !isBillingFailure(cr))
   const anyCheckFailed = Array.some(
-    checkRuns,
+    nonBillingRuns,
     (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
   )
-  return state === "failure" || anyCheckFailed
+  return (state === "failure" && nonBillingRuns.length > 0) || anyCheckFailed
 }
 
 /**
@@ -182,7 +190,9 @@ export const PullRequestTrackerLive = Layer.effect(
           if (!alreadyNotified) {
             const failedChecks = Array.filter(
               ciStatus.checkRuns,
-              (cr) => cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped"
+              (cr) =>
+                cr.conclusion !== null && cr.conclusion !== "success" && cr.conclusion !== "skipped" &&
+                !isBillingFailure(cr)
             )
 
             const failedCheckNames = Array.map(failedChecks, (cr) => `- ${cr.name}: ${cr.conclusion}`).join("\n")
