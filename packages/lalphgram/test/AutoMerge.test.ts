@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "@effect/vitest"
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import type { AutoMergeEvent } from "../src/Events.js"
 import { PRAutoMerged } from "../src/Events.js"
-import { GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
+import { GitHubComment, GitHubPullRequest, GitHubRepo } from "../src/schemas/GitHubSchemas.js"
 import { AppRuntimeConfig, RuntimeConfig } from "../src/services/AppRuntimeConfig.js"
 import { AutoMerge, AutoMergeLive } from "../src/services/AutoMerge.js"
 import type { GitHubClientService } from "../src/services/GitHubClient.js"
@@ -72,6 +72,20 @@ const makeGitHubClientMock = (overrides: Partial<GitHubClientService> = {}): Git
     getCIStatus: vi.fn(() => Effect.succeed({ state: "success", checkRuns: [] })),
     mergePR: vi.fn(() => Effect.succeed(undefined)),
     ...overrides
+  })
+
+const makeComment = (overrides: Partial<{
+  id: number
+  body: string
+  login: string
+}> = {}) =>
+  new GitHubComment({
+    id: overrides.id ?? 1,
+    body: overrides.body ?? "Some comment",
+    user: { login: overrides.login ?? "reviewer" },
+    created_at: "2024-01-15T10:00:00Z",
+    html_url: "https://github.com/owner/my-repo/pull/1#issuecomment-1",
+    repo: "owner/my-repo"
   })
 
 const makeTestLayer = (
@@ -429,6 +443,119 @@ describe("AutoMerge", () => {
           ]
         })
       ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("skips merge when PR has manual comments", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "success",
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
+        })
+      ),
+      listComments: vi.fn(() =>
+        Effect.succeed([
+          makeComment({ id: 1, body: "Looks good, but needs a fix" })
+        ])
+      ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return collectEventsFor(50).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(0)
+        expect(githubMock.mergePR).not.toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("merges when PR only has automatic comments", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "success",
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
+        })
+      ),
+      listComments: vi.fn(() =>
+        Effect.succeed([
+          makeComment({ id: 1, body: "[Automatic] CI checks failed for this PR" }),
+          makeComment({ id: 2, body: "[Automatic] This PR has merge conflicts" })
+        ])
+      ),
+      mergePR: vi.fn(() => Effect.succeed(undefined))
+    })
+    const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })
+
+    // Act
+    return takeEvents(1).pipe(
+      Effect.provide(makeTestLayer(githubMock, config)),
+      Effect.map((events) => {
+        // Assert
+        expect(events).toHaveLength(1)
+        expect(events[0]).toBeInstanceOf(PRAutoMerged)
+        expect(githubMock.mergePR).toHaveBeenCalled()
+      })
+    )
+  })
+
+  it.live("merges when PR has no comments", () => {
+    // Arrange
+    const githubMock = makeGitHubClientMock({
+      listOpenPRs: vi.fn(() => Effect.succeed([makePR()])),
+      getCIStatus: vi.fn(() =>
+        Effect.succeed({
+          state: "success",
+          checkRuns: [{
+            id: 1,
+            name: "build",
+            status: "completed",
+            conclusion: "success",
+            html_url: "",
+            output: null,
+            annotationMessages: []
+          }]
+        })
+      ),
+      listComments: vi.fn(() => Effect.succeed([])),
       mergePR: vi.fn(() => Effect.succeed(undefined))
     })
     const config = makeRuntimeConfig({ autoMergeEnabled: true, autoMergeWaitMinutes: 0 })

@@ -64,10 +64,12 @@ const makeOctokitMock = (): OctokitClientService => ({
       state: "open",
       htmlUrl: "",
       createdAt: "",
-      updatedAt: ""
+      updatedAt: "",
+      labels: []
     })
   ),
   addIssueLabels: vi.fn(() => Effect.void),
+  removeIssueLabel: vi.fn(() => Effect.void),
   listPullReviewComments: vi.fn(() =>
     Effect.succeed([{
       id: 300,

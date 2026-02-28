@@ -16,6 +16,13 @@ const extractRepoFullName = (repositoryUrl: string): string => {
   return parts[1] ?? repositoryUrl
 }
 
+const deriveState = (githubState: string, labels: ReadonlyArray<string>): string => {
+  if (githubState === "closed") return "Done"
+  if (labels.includes("in-review")) return "In-review"
+  if (labels.includes("in-progress")) return "In Progress"
+  return "Todo"
+}
+
 const parseIssueId = (issueId: string) => {
   const slashIdx = issueId.indexOf("/")
   const hashIdx = issueId.indexOf("#")
@@ -54,7 +61,7 @@ export const GitHubIssueTrackerLive = Layer.effect(
           const trackerIssue = new TrackerIssue({
             id: `${issueRepoFullName}#${issue.number}`,
             title: issue.title,
-            state: issue.state,
+            state: deriveState(issue.state, issue.labels),
             url: issue.htmlUrl,
             createdAt: issue.createdAt,
             updatedAt: issue.updatedAt
@@ -116,12 +123,13 @@ export const GitHubIssueTrackerLive = Layer.effect(
       moveToTodo: (issueId) =>
         Effect.gen(function*() {
           const { issueNumber, owner, repo } = parseIssueId(issueId)
-          yield* octokit.addIssueLabels({
-            owner,
-            repo,
-            issueNumber: Number(issueNumber),
-            labels: ["todo"]
-          }).pipe(
+          const num = Number(issueNumber)
+          yield* octokit.removeIssueLabel({ owner, repo, issueNumber: num, name: "in-progress" }).pipe(
+            Effect.mapError((err) =>
+              new TaskTrackerError({ message: `GitHub API request failed: ${String(err)}`, cause: err })
+            )
+          )
+          yield* octokit.removeIssueLabel({ owner, repo, issueNumber: num, name: "in-review" }).pipe(
             Effect.mapError((err) =>
               new TaskTrackerError({ message: `GitHub API request failed: ${String(err)}`, cause: err })
             )
@@ -158,7 +166,7 @@ export const GitHubIssueTrackerLive = Layer.effect(
           return new TrackerIssue({
             id: `${owner}/${repo}#${issue.number}`,
             title: issue.title,
-            state: issue.state,
+            state: deriveState(issue.state, issue.labels),
             url: issue.htmlUrl,
             createdAt: issue.createdAt,
             updatedAt: issue.updatedAt

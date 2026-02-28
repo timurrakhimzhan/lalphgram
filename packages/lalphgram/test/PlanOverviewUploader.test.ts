@@ -39,9 +39,10 @@ describe("GistPlanOverviewUploaderLive", () => {
       listIssueComments: vi.fn(() => Effect.succeed([])),
       listUserIssues: vi.fn(() => Effect.succeed([])),
       getIssue: vi.fn(() =>
-        Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "" })
+        Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "", labels: [] })
       ),
       addIssueLabels: vi.fn(() => Effect.void),
+      removeIssueLabel: vi.fn(() => Effect.void),
       listPullReviewComments: vi.fn(() => Effect.succeed([])),
       getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
       listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
@@ -98,9 +99,10 @@ describe("GistPlanOverviewUploaderLive", () => {
       listIssueComments: vi.fn(() => Effect.succeed([])),
       listUserIssues: vi.fn(() => Effect.succeed([])),
       getIssue: vi.fn(() =>
-        Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "" })
+        Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "", labels: [] })
       ),
       addIssueLabels: vi.fn(() => Effect.void),
+      removeIssueLabel: vi.fn(() => Effect.void),
       listPullReviewComments: vi.fn(() => Effect.succeed([])),
       getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
       listCheckRunsForRef: vi.fn(() => Effect.succeed([])),

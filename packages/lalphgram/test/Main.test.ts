@@ -168,9 +168,10 @@ const makeOctokitClientMock = (overrides?: Partial<OctokitClientService>) =>
     listIssueComments: vi.fn(() => Effect.succeed([])),
     listUserIssues: vi.fn(() => Effect.succeed([])),
     getIssue: vi.fn(() =>
-      Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "" })
+      Effect.succeed({ number: 1, title: "", state: "open", htmlUrl: "", createdAt: "", updatedAt: "", labels: [] })
     ),
     addIssueLabels: vi.fn(() => Effect.void),
+    removeIssueLabel: vi.fn(() => Effect.void),
     listPullReviewComments: vi.fn(() => Effect.succeed([])),
     getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
     listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
@@ -388,7 +389,7 @@ describe("event loop dispatch", () => {
       expect(githubClientMock.postComment).toHaveBeenCalledWith(
         expect.objectContaining({ full_name: "owner/repo" }),
         1,
-        "This PR has merge conflicts that need to be resolved."
+        "[Automatic] This PR has merge conflicts that need to be resolved."
       )
       expect(trackerMock.moveToTodo).toHaveBeenCalledWith("ABC-123")
       expect(messengerMock.sendMessage).toHaveBeenCalledWith(

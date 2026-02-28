@@ -132,9 +132,10 @@ Low-level Octokit SDK wrapper. Dynamically refreshes if GitHub token changes.
 | `listUserIssues(...)` | List issues assigned to user |
 | `getIssue(...)` | Get single issue |
 | `addIssueLabels(...)` | Add labels to issue |
+| `removeIssueLabel(...)` | Remove a label from issue (silently ignores 404) |
 | `createGist(...)` | Create a GitHub Gist (description, files, isPublic) → `OctokitGist` |
 
-**Models**: `OctokitUser`, `OctokitRepo`, `OctokitPullRequest`, `OctokitPullRequestDetail`, `OctokitComment`, `OctokitIssue`, `OctokitIssueDetail`, `OctokitCheckRun`, `OctokitCheckRunAnnotation` (`{ annotationLevel, message }`), `OctokitCombinedStatus`, `OctokitMergeResult`, `OctokitGist` (`{ id, htmlUrl, files: Record<string, { rawUrl }> }`), `OctokitRateLimit` (`{ limit, remaining, reset }`)
+**Models**: `OctokitUser`, `OctokitRepo`, `OctokitPullRequest`, `OctokitPullRequestDetail`, `OctokitComment`, `OctokitIssue` (includes `labels: ReadonlyArray<string>`), `OctokitIssueDetail` (includes `labels: ReadonlyArray<string>`), `OctokitCheckRun`, `OctokitCheckRunAnnotation` (`{ annotationLevel, message }`), `OctokitCombinedStatus`, `OctokitMergeResult`, `OctokitGist` (`{ id, htmlUrl, files: Record<string, { rawUrl }> }`), `OctokitRateLimit` (`{ limit, remaining, reset }`)
 
 **ETag caching**: `etagCache` (module-level `Map`) stores ETags per request key. `registerETagHooks` installs Octokit hooks to send `If-None-Match` headers and return cached responses on 304.
 
@@ -199,7 +200,7 @@ Polls at configured interval. Merges PRs when CI passes and enough time has elap
 
 **Events emitted**: `PRAutoMerged`
 
-**Logic**: Tracks head SHA timestamps per PR. Waits `autoMergeWaitMinutes` after last push. Checks all CI checks complete and passed. Skips PRs with conflicts. Emits empty stream if `autoMergeEnabled` is false.
+**Logic**: Tracks head SHA timestamps per PR. Waits `autoMergeWaitMinutes` after last push. Checks all CI checks complete and passed. Skips PRs with conflicts. Skips PRs with manual comments (any comment not prefixed with `[Automatic]`). Emits empty stream if `autoMergeEnabled` is false.
 
 **Error**: `AutoMergeError`
 **Layer**: `AutoMergeLive` — requires `GitHubClient`, `AppRuntimeConfig`, `LalphConfig`
@@ -250,7 +251,8 @@ Abstract interface for issue tracking. Two implementations selected at runtime v
 **File**: `services/TaskTracker/GitHubIssueTracker.ts`
 - Polls GitHub issues updated since last poll, filtered to current repo via `LalphConfig.repoFullName`
 - Issue ID format: `owner/repo#number`
-- `moveToTodo` adds "todo" label
+- **State derivation**: `deriveState(githubState, labels)` maps GitHub state + labels to canonical states: `closed` → "Done", label `in-review` → "In-review", label `in-progress` → "In Progress", default → "Todo". This means label changes that affect derived state emit `TaskUpdated` events
+- `moveToTodo` removes "in-progress" and "in-review" labels (deriving state back to "Todo")
 - `setPriorityUrgent` adds "urgent" label
 - **Layer**: `GitHubIssueTrackerLive` — requires `OctokitClient`, `AppRuntimeConfig`, `LalphConfig`
 

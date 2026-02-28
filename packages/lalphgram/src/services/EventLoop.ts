@@ -185,7 +185,7 @@ export const runEventLoop = Effect.gen(function*() {
               html_url: ""
             }),
             e.pr.number,
-            "This PR has merge conflicts that need to be resolved."
+            "[Automatic] This PR has merge conflicts that need to be resolved."
           )
           const issueIdOption = branchParser.resolveIssueId(e.pr)
           if (Option.isSome(issueIdOption)) {

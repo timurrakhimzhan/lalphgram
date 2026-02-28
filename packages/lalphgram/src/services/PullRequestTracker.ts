@@ -199,7 +199,7 @@ export const PullRequestTrackerLive = Layer.effect(
             yield* github.postComment(
               repo,
               pr.number,
-              `CI checks failed for this PR:\n${failedCheckNames}`
+              `[Automatic] CI checks failed for this PR:\n${failedCheckNames}`
             ).pipe(
               Effect.mapError((err) =>
                 new PullRequestTrackerError({

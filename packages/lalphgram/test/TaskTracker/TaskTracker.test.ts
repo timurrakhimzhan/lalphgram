@@ -204,10 +204,12 @@ const makeGitHubOctokitMock = (overrides: Partial<OctokitClientService> = {}): O
         state: "open",
         htmlUrl: "",
         createdAt: "",
-        updatedAt: ""
+        updatedAt: "",
+        labels: []
       })
     ),
     addIssueLabels: vi.fn(() => Effect.void),
+    removeIssueLabel: vi.fn(() => Effect.void),
     listPullReviewComments: vi.fn(() => Effect.succeed([])),
     getCombinedStatusForRef: vi.fn(() => Effect.succeed({ state: "success", statuses: [] })),
     listCheckRunsForRef: vi.fn(() => Effect.succeed([])),
@@ -236,7 +238,7 @@ const makeGitHubIssueTrackerTestLayer = (mock: OctokitClientService) =>
   )
 
 describe("GitHubIssueTracker", () => {
-  it.effect("moveToTodo adds a todo label to the issue", () => {
+  it.effect("moveToTodo removes in-progress and in-review labels", () => {
     // Arrange
     const mock = makeGitHubOctokitMock()
 
@@ -247,11 +249,17 @@ describe("GitHubIssueTracker", () => {
       yield* tracker.moveToTodo("owner/repo#42")
 
       // Assert
-      expect(mock.addIssueLabels).toHaveBeenCalledWith({
+      expect(mock.removeIssueLabel).toHaveBeenCalledWith({
         owner: "owner",
         repo: "repo",
         issueNumber: 42,
-        labels: ["todo"]
+        name: "in-progress"
+      })
+      expect(mock.removeIssueLabel).toHaveBeenCalledWith({
+        owner: "owner",
+        repo: "repo",
+        issueNumber: 42,
+        name: "in-review"
       })
     }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
   })
@@ -286,7 +294,8 @@ describe("GitHubIssueTracker", () => {
           state: "open",
           htmlUrl: "https://github.com/owner/repo/issues/42",
           createdAt: "2024-01-01T00:00:00Z",
-          updatedAt: "2024-01-02T00:00:00Z"
+          updatedAt: "2024-01-02T00:00:00Z",
+          labels: []
         })
       )
     })
@@ -300,7 +309,7 @@ describe("GitHubIssueTracker", () => {
       // Assert
       expect(issue.id).toBe("owner/repo#42")
       expect(issue.title).toBe("Fetched issue")
-      expect(issue.state).toBe("open")
+      expect(issue.state).toBe("Todo")
       expect(issue.url).toBe("https://github.com/owner/repo/issues/42")
       expect(mock.getIssue).toHaveBeenCalledWith({
         owner: "owner",
@@ -343,7 +352,8 @@ describe("GitHubIssueTracker", () => {
             htmlUrl: "https://github.com/owner/my-repo/issues/1",
             createdAt: now,
             updatedAt: now,
-            repositoryUrl: "https://api.github.com/repos/owner/my-repo"
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+            labels: []
           },
           {
             number: 2,
@@ -352,7 +362,8 @@ describe("GitHubIssueTracker", () => {
             htmlUrl: "https://github.com/owner/other-repo/issues/2",
             createdAt: now,
             updatedAt: now,
-            repositoryUrl: "https://api.github.com/repos/owner/other-repo"
+            repositoryUrl: "https://api.github.com/repos/owner/other-repo",
+            labels: []
           }
         ])
       )
@@ -369,6 +380,112 @@ describe("GitHubIssueTracker", () => {
       expect(events).toHaveLength(1)
       expect(events[0]!._tag).toBe("TaskCreated")
       expect(events[0]!.issue.id).toBe("owner/my-repo#1")
+    }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
+  })
+
+  it.live("emits TaskUpdated when label changes derive a new state", () => {
+    // Arrange
+    const created = "2024-01-01T00:00:00.000Z"
+    const updated = "2024-01-02T00:00:00.000Z"
+    let callCount = 0
+    const mock = makeGitHubOctokitMock({
+      listUserIssues: vi.fn(() => {
+        callCount++
+        if (callCount === 1) {
+          return Effect.succeed([{
+            number: 10,
+            title: "Label test issue",
+            state: "open",
+            htmlUrl: "https://github.com/owner/my-repo/issues/10",
+            createdAt: created,
+            updatedAt: created,
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+            labels: []
+          }])
+        }
+        return Effect.succeed([{
+          number: 10,
+          title: "Label test issue",
+          state: "open",
+          htmlUrl: "https://github.com/owner/my-repo/issues/10",
+          createdAt: created,
+          updatedAt: updated,
+          repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+          labels: ["in-progress"]
+        }])
+      })
+    })
+
+    return Effect.gen(function*() {
+      const tracker = yield* TaskTracker
+
+      // Act — first poll creates (state "Todo"), second poll detects label-derived state change
+      const chunk = yield* tracker.eventStream.pipe(Stream.take(2), Stream.runCollect)
+      const events = Array.from(chunk)
+
+      // Assert
+      expect(events).toHaveLength(2)
+      expect(events[0]!._tag).toBe("TaskCreated")
+      expect(events[0]!.issue.state).toBe("Todo")
+      expect(events[1]!._tag).toBe("TaskUpdated")
+      if (events[1]!._tag === "TaskUpdated") {
+        expect(events[1]!.previousState).toBe("Todo")
+        expect(events[1]!.issue.state).toBe("In Progress")
+      }
+    }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
+  })
+
+  it.live("derives state from labels: closed → Done, in-review → In-review, default → Todo", () => {
+    // Arrange
+    const now = "2024-01-01T00:00:00.000Z"
+    const mock = makeGitHubOctokitMock({
+      listUserIssues: vi.fn(() =>
+        Effect.succeed([
+          {
+            number: 1,
+            title: "Closed issue",
+            state: "closed",
+            htmlUrl: "https://github.com/owner/my-repo/issues/1",
+            createdAt: now,
+            updatedAt: now,
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+            labels: ["in-progress"]
+          },
+          {
+            number: 2,
+            title: "In review issue",
+            state: "open",
+            htmlUrl: "https://github.com/owner/my-repo/issues/2",
+            createdAt: now,
+            updatedAt: now,
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+            labels: ["in-review"]
+          },
+          {
+            number: 3,
+            title: "Plain issue",
+            state: "open",
+            htmlUrl: "https://github.com/owner/my-repo/issues/3",
+            createdAt: now,
+            updatedAt: now,
+            repositoryUrl: "https://api.github.com/repos/owner/my-repo",
+            labels: []
+          }
+        ])
+      )
+    })
+
+    return Effect.gen(function*() {
+      const tracker = yield* TaskTracker
+
+      // Act
+      const chunk = yield* tracker.eventStream.pipe(Stream.take(3), Stream.runCollect)
+      const events = Array.from(chunk)
+
+      // Assert — closed wins over in-progress label
+      expect(events[0]!.issue.state).toBe("Done")
+      expect(events[1]!.issue.state).toBe("In-review")
+      expect(events[2]!.issue.state).toBe("Todo")
     }).pipe(Effect.provide(makeGitHubIssueTrackerTestLayer(mock)))
   })
 })

@@ -163,6 +163,13 @@ export const AutoMergeLive = Layer.effect(
             return events
           }
 
+          // Skip merge if PR has manual (non-automatic) comments
+          const comments = yield* github.listComments(repo, pr.number)
+          const hasManualComment = Array.some(comments, (c) => !c.body.startsWith("[Automatic]"))
+          if (hasManualComment) {
+            return events
+          }
+
           // Merge the PR
           yield* github.mergePR(repo, pr.number)
           yield* Ref.update(mergedPRsRef, (s) => HashSet.add(s, pr.number))

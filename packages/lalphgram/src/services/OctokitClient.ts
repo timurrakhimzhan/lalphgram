@@ -111,6 +111,7 @@ export interface OctokitIssue {
   readonly createdAt: string
   readonly updatedAt: string
   readonly repositoryUrl: string
+  readonly labels: ReadonlyArray<string>
 }
 
 /**
@@ -124,6 +125,7 @@ export interface OctokitIssueDetail {
   readonly htmlUrl: string
   readonly createdAt: string
   readonly updatedAt: string
+  readonly labels: ReadonlyArray<string>
 }
 
 /**
@@ -239,6 +241,12 @@ export interface OctokitClientService {
     readonly repo: string
     readonly issueNumber: number
     readonly labels: ReadonlyArray<string>
+  }) => Effect.Effect<void, OctokitClientError>
+  readonly removeIssueLabel: (params: {
+    readonly owner: string
+    readonly repo: string
+    readonly issueNumber: number
+    readonly name: string
   }) => Effect.Effect<void, OctokitClientError>
   readonly listPullReviewComments: (params: {
     readonly owner: string
@@ -488,7 +496,10 @@ export const OctokitClientLive = Layer.effect(
               htmlUrl: i.html_url,
               createdAt: i.created_at,
               updatedAt: i.updated_at,
-              repositoryUrl: i.repository_url
+              repositoryUrl: i.repository_url,
+              labels: i.labels
+                .map((l) => typeof l === "string" ? l : l.name ?? "")
+                .filter((name) => name !== "")
             }))
           )
         )
@@ -516,7 +527,10 @@ export const OctokitClientLive = Layer.effect(
             state: response.data.state,
             htmlUrl: response.data.html_url,
             createdAt: response.data.created_at,
-            updatedAt: response.data.updated_at
+            updatedAt: response.data.updated_at,
+            labels: response.data.labels
+              .map((l) => typeof l === "string" ? l : l.name ?? "")
+              .filter((name) => name !== "")
           }))
         )
       })
@@ -539,6 +553,33 @@ export const OctokitClientLive = Layer.effect(
             }),
           catch: (err) => new OctokitClientError({ message: `Failed to add issue labels: ${String(err)}`, cause: err })
         }).pipe(Effect.asVoid)
+      })
+
+    const removeIssueLabel = (params: {
+      readonly owner: string
+      readonly repo: string
+      readonly issueNumber: number
+      readonly name: string
+    }) =>
+      Effect.gen(function*() {
+        const client = yield* getClient
+        return yield* Effect.tryPromise({
+          try: () =>
+            client.rest.issues.removeLabel({
+              owner: params.owner,
+              repo: params.repo,
+              issue_number: params.issueNumber,
+              name: params.name
+            }),
+          catch: (err) =>
+            new OctokitClientError({ message: `Failed to remove issue label: ${String(err)}`, cause: err })
+        }).pipe(
+          Effect.catchIf(
+            (err) => err.message.includes("404"),
+            () => Effect.void
+          ),
+          Effect.asVoid
+        )
       })
 
     const listPullReviewComments = (params: {
@@ -723,6 +764,7 @@ export const OctokitClientLive = Layer.effect(
       listUserIssues,
       getIssue,
       addIssueLabels,
+      removeIssueLabel,
       listPullReviewComments,
       getCombinedStatusForRef,
       listCheckRunsForRef,

@@ -452,7 +452,7 @@ describe("PullRequestTracker", () => {
         expect(postCommentMock).toHaveBeenCalledWith(
           expect.objectContaining({ full_name: "owner/my-repo" }),
           1,
-          expect.stringContaining("build: failure")
+          expect.stringMatching(/^\[Automatic\].*build: failure/s)
         )
       })
     )
