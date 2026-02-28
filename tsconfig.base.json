@@ -55,7 +55,7 @@
         "packages/server/src/index.ts"
       ],
       "@qotaq/lalphgram": [
-        "packages/notifications/src/index.ts"
+        "packages/lalphgram/src/index.ts"
       ]
     }
   }

@@ -8,7 +8,7 @@
 
 ## Codebase Understanding
 
-- **For overall codebase understanding, read the PROJECT.md files** (root, `packages/notifications`, `packages/claude-shim`, `packages/eslint-plugin`) instead of scanning source files. They document every service, method, type, and how they interconnect
+- **For overall codebase understanding, read the PROJECT.md files** (root, `packages/lalphgram`, `packages/claude-shim`, `packages/eslint-plugin`) instead of scanning source files. They document every service, method, type, and how they interconnect
 
 ## Reference Documentation
 

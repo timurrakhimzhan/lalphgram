@@ -1,13 +1,13 @@
 {
   "name": "@qotaq/lalphgram",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "license": "MIT",
   "description": "Notification service for task tracker and GitHub events",
   "repository": {
     "type": "git",
-    "url": "<PLACEHOLDER>",
-    "directory": "packages/notifications"
+    "url": "https://github.com/timurrakhimzhan/lalphgram.git",
+    "directory": "packages/lalphgram"
   },
   "bin": {
     "lalphgram": "./dist/esm/Main.js"

@@ -4,7 +4,7 @@
 
 | Package | Path | Purpose |
 |---|---|---|
-| `@qotaq/lalphgram` | `packages/notifications` | Main app — polls GitHub/Linear, sends Telegram notifications, manages plan sessions with Claude. Includes SDK-based claude shim at `src/shim/` |
+| `@qotaq/lalphgram` | `packages/lalphgram` | Main app — polls GitHub/Linear, sends Telegram notifications, manages plan sessions with Claude. Includes SDK-based claude shim at `src/shim/` |
 | `@qotaq/eslint-plugin` | `packages/eslint-plugin` | Custom ESLint rules for Effect-TS patterns |
 
 ## Dependency Graph
