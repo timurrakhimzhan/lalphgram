@@ -575,7 +575,7 @@ export const OctokitClientLive = Layer.effect(
             new OctokitClientError({ message: `Failed to remove issue label: ${String(err)}`, cause: err })
         }).pipe(
           Effect.catchIf(
-            (err) => err.message.includes("404"),
+            (err) => err.message.includes("404") || err.message.includes("Label does not exist"),
             () => Effect.void
           ),
           Effect.asVoid
